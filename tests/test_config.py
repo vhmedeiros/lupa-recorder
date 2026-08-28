@@ -42,6 +42,27 @@ def test_carrega_agent_toml_valido(tmp_path):
     assert cfg.retention.watermark_high_data == pytest.approx(0.85)
 
 
+def test_til_no_caminho_e_expandido(tmp_path, monkeypatch):
+    # achado ao vivo (2026-08-28): TOML não expande `~` como o shell — sem o fix,
+    # `system_root = "~/x"` vira um caminho literal com o caractere `~` dentro.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    caminho = tmp_path / "agent.toml"
+    caminho.write_text("""
+[agent]
+name = "x"
+[paths]
+data_root = "/mnt/acervo/lupa-recorder"
+system_root = "~/lupa-recorder/system"
+[security]
+hmac_secret = "segredo-com-mais-de-16-caracteres"
+""")
+
+    cfg = load_agent_config(caminho)
+
+    assert cfg.paths.system_root == tmp_path / "lupa-recorder" / "system"
+    assert "~" not in str(cfg.paths.system_root)
+
+
 def test_agent_toml_inexistente_da_erro_claro(tmp_path):
     with pytest.raises(ConfigError, match="não existe"):
         load_agent_config(tmp_path / "nao-existe.toml")

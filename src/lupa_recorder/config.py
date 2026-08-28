@@ -44,6 +44,14 @@ class PathsConfig(BaseModel):
     # SSD — catálogo SQLite e scratch. Latência importa, volume escrito é pequeno.
     system_root: Path
 
+    @field_validator("data_root", "system_root")
+    @classmethod
+    def expandir_til(cls, v: Path) -> Path:
+        # TOML/pydantic não expande `~` como o shell faz — achado testando ao vivo
+        # (2026-08-28): `system_root = "~/lupa-recorder/system"` virava caminho literal
+        # com um `~` de verdade no nome, nunca resolvia pra home de ninguém.
+        return v.expanduser()
+
     def disco_do_acervo_disponivel_gb(self) -> float:
         uso = shutil.disk_usage(self.data_root)
         return uso.free / (1024**3)
