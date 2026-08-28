@@ -1,0 +1,21 @@
+# Copie para agent.toml e ajuste pra esta máquina. Nunca commite o agent.toml real —
+# tem segredo (hmac_secret) e é específico de cada gravador.
+
+[agent]
+name = "recorder-maringa-01"
+
+[paths]
+# HD dedicado ao acervo — vídeo/áudio bruto e miniaturas. Nunca o mesmo disco do sistema.
+data_root = "/mnt/acervo/lupa-recorder"
+# SSD do sistema — catálogo SQLite e scratch. Latência importa aqui, volume escrito é pequeno.
+system_root = "/var/lib/lupa-recorder"
+
+[retention]
+watermark_high_system = 0.85
+watermark_low_system = 0.70
+watermark_high_data = 0.85
+watermark_low_data = 0.70
+
+[security]
+# gere um de verdade: python -c "import secrets; print(secrets.token_urlsafe(32))"
+hmac_secret = "troque-isto-por-um-segredo-real-de-pelo-menos-16-caracteres"

@@ -9,6 +9,13 @@ description = "Gravador autônomo de TV/rádio da plataforma Lupa — captura, c
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "Proprietary" }
+dependencies = [
+    "pydantic-settings>=2.6",
+    "pyyaml>=6",
+]
+
+[project.scripts]
+lupa-recorder = "lupa_recorder.cli:main"
 
 [project.optional-dependencies]
 dev = [

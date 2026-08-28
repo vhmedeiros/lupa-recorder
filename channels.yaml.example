@@ -1,0 +1,42 @@
+# Copie para channels.yaml e cadastre as fontes desta máquina. Editado à mão nesta fase —
+# a Fase 2 passa a gerar isso a partir da Lupa, com o mesmo formato (não muda, pra não
+# haver retrabalho).
+#
+# protocol=dvb ainda não é suportado (GRV-01, placa adiada por custo) — só fontes de rede.
+
+sources:
+  - id: 1
+    slug: radio-ouveai
+    kind: radio
+    protocol: http
+    url: "https://stream01.ouveai.com.br:1072/stream"
+    url_resolver: static
+    archive_profile: copy
+    tier: standard
+    transcribable: true
+    segment_seconds: 240
+    thumbnails: false # rádio não tem frame de vídeo
+
+  - id: 2
+    slug: tv-cultura
+    kind: tv
+    protocol: hls
+    url: "https://player-tvcultura.stream.uol.com.br/live/tvcultura_lsd.m3u8?vhost=player-tvcultura.stream.uol.com.br"
+    url_resolver: static
+    archive_profile: copy
+    tier: critical
+    transcribable: true
+    segment_seconds: 240
+    thumbnails: true
+
+  - id: 3
+    slug: tv-assembleia
+    kind: tv
+    protocol: youtube
+    url: "https://youtube.com/@exemplo/live"
+    url_resolver: yt_dlp # obrigatório pra protocol=youtube — achado de campo da Fase 0
+    quality_profile: "480p"
+    archive_profile: copy
+    tier: background
+    segment_seconds: 240
+    thumbnails: true

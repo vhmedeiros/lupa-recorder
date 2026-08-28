@@ -1,3 +1,4 @@
+.devbin/
 __pycache__/
 *.pyc
 .venv/
