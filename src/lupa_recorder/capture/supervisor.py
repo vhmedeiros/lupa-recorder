@@ -22,6 +22,7 @@ import signal
 import sqlite3
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Protocol
 
@@ -35,10 +36,18 @@ from lupa_recorder.capture.segments import (
 )
 from lupa_recorder.capture.strategies import criar_estrategia
 from lupa_recorder.capture.strategies.base import SourceStrategy
-from lupa_recorder.catalog.models import Event, Segment, inserir_segmento, registrar_evento
-from lupa_recorder.config import SourceConfig, UrlResolver
+from lupa_recorder.catalog.models import (
+    Event,
+    Segment,
+    inserir_segmento,
+    marcar_has_thumbnails,
+    registrar_evento,
+)
+from lupa_recorder.config import SourceConfig, SourceKind, UrlResolver
 from lupa_recorder.resolve import criar_resolver
 from lupa_recorder.resolve.base import ResolvedInput, Resolver
+from lupa_recorder.thumbs.extract import extrair_miniaturas_do_segmento
+from lupa_recorder.thumbs.manager import pasta_thumbs_do_dia
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +124,8 @@ class SourceSupervisor:
         backoff: BackoffPolicy | None = None,
         flapping: FlappingTracker | None = None,
         catalog_conn: sqlite3.Connection | None = None,
+        system_root: Path | None = None,
+        extrator_thumbnails=extrair_miniaturas_do_segmento,
         sleep=asyncio.sleep,
         agora=time.time,
     ) -> None:
@@ -131,11 +142,19 @@ class SourceSupervisor:
         # opcional de propósito: os testes do supervisor não passam catálogo nenhum, e o
         # laço continua funcionando igual — só não fica nada gravado (log ainda funciona).
         self.catalog_conn = catalog_conn
+        # sem system_root, miniaturas simplesmente não são geradas (não é erro) — só
+        # `kind=tv` gera de qualquer jeito (rádio não tem frame, plano §11.4).
+        self.system_root = system_root
+        self._extrator_thumbnails = extrator_thumbnails
         self._sleep = sleep
         self._agora = agora
 
         self.estado = EstadoSupervisor.parado
         self.tentativas = 0
+        # tarefas de background (extração de thumbnail) — precisa de referência forte, senão
+        # o asyncio pode coletar a tarefa no meio antes dela rodar (pegadinha documentada:
+        # "save a reference to the result of create_task/ensure_future").
+        self._tarefas_background: set[asyncio.Future] = set()
 
     def _offset_restart_planejado_s(self) -> int:
         # "deslocado por fonte" (plano §7.4) — não faz todo mundo reiniciar junto.
@@ -253,6 +272,7 @@ class SourceSupervisor:
             garantir_pastas_do_dia(self.data_root, self.source.slug)
             for promovido in promover_segmentos_prontos(self.data_root, self.source.slug):
                 self._catalogar_segmento(promovido)
+                self._agendar_thumbnails(promovido)
             progresso = ultimo_progresso_em(self.data_root, self.source.slug)
             if progresso is not None:
                 ultimo_progresso = max(ultimo_progresso, progresso)
@@ -325,3 +345,31 @@ class SourceSupervisor:
             # arquivo em si já está seguro em disco, o catálogo é reconstruível dele
             # de qualquer jeito (`catalog/recover.py`).
             logger.exception("fonte %s: falha catalogando %s", self.source.slug, caminho)
+
+    def _agendar_thumbnails(self, caminho: Path) -> None:
+        """Roda em background (`asyncio.ensure_future`, não `await`) — miniatura nunca
+        pode atrasar o laço de vigilância da captura (plano §11.4: "a captura sempre
+        ganha"). Só `kind=tv` — rádio não tem frame."""
+        if self.system_root is None or self.source.kind != SourceKind.tv:
+            return
+        iniciado_em = started_at_do_arquivo(caminho)
+        if iniciado_em is None:
+            return
+        tarefa = asyncio.ensure_future(self._gerar_thumbnails(caminho, iniciado_em))
+        self._tarefas_background.add(tarefa)
+        tarefa.add_done_callback(self._tarefas_background.discard)
+
+    async def _gerar_thumbnails(self, caminho: Path, started_at: str) -> None:
+        pasta = pasta_thumbs_do_dia(self.system_root, self.source.slug, datetime.fromisoformat(started_at))
+        try:
+            geradas = await asyncio.to_thread(
+                self._extrator_thumbnails, caminho, pasta, self.source.segment_seconds
+            )
+        except Exception:
+            logger.exception("fonte %s: falha extraindo miniaturas de %s", self.source.slug, caminho)
+            return
+        if self.catalog_conn is not None:
+            try:
+                marcar_has_thumbnails(self.catalog_conn, self.source.slug, started_at, bool(geradas))
+            except sqlite3.Error:
+                logger.exception("fonte %s: falha marcando has_thumbnails", self.source.slug)

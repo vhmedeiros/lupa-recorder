@@ -79,6 +79,13 @@ def marcar_estado(conn: sqlite3.Connection, source_slug: str, started_at: str, e
     )
 
 
+def marcar_has_thumbnails(conn: sqlite3.Connection, source_slug: str, started_at: str, valor: bool) -> None:
+    conn.execute(
+        "UPDATE segment SET has_thumbnails = ? WHERE source_slug = ? AND started_at = ?",
+        (int(valor), source_slug, started_at),
+    )
+
+
 def definir_hold_until(conn: sqlite3.Connection, source_slug: str, started_at: str, hold_until: str | None) -> None:
     conn.execute(
         "UPDATE segment SET hold_until = ? WHERE source_slug = ? AND started_at = ?",

@@ -24,7 +24,8 @@ from lupa_recorder.catalog.models import SegmentState, listar_eventos, listar_se
 from lupa_recorder.catalog.recover import reconstruir_catalogo_da_fonte, recuperar_orfaos
 from lupa_recorder.config import Config, ConfigError
 from lupa_recorder.probe import ProbeError, ResultadoProbe, probe
-from lupa_recorder.retention.gc import executar_loop
+from lupa_recorder.retention.gc import executar_loop as executar_loop_gc
+from lupa_recorder.thumbs.manager import executar_loop as executar_loop_thumbs
 
 NOME_ARQUIVO_CATALOGO = "catalog.sqlite3"
 
@@ -252,16 +253,19 @@ async def _supervisionar_todas_as_fontes(cfg: Config) -> int:
                 f"{len(resultado.descartados)} descartado(s)"
             )
 
+    system_root = cfg.agent.paths.system_root
     supervisores = [
-        SourceSupervisor(fonte, data_root, catalog_conn=catalog_conn) for fonte in cfg.channels.sources
+        SourceSupervisor(fonte, data_root, catalog_conn=catalog_conn, system_root=system_root)
+        for fonte in cfg.channels.sources
     ]
     for sup in supervisores:
         print(f"iniciando {sup.source.slug} ({sup.source.protocol})")
 
     tier_por_fonte = {fonte.slug: fonte.tier for fonte in cfg.channels.sources}
+    slugs_tv = [fonte.slug for fonte in cfg.channels.sources if fonte.kind == "tv"]
     tarefas = [sup.run_forever(stop_event) for sup in supervisores]
     tarefas.append(
-        executar_loop(
+        executar_loop_gc(
             catalog_conn,
             data_root,
             tier_por_fonte,
@@ -270,6 +274,8 @@ async def _supervisionar_todas_as_fontes(cfg: Config) -> int:
             watermark_low=cfg.agent.retention.watermark_low_data,
         )
     )
+    if slugs_tv:
+        tarefas.append(executar_loop_thumbs(system_root, slugs_tv, stop_event))
 
     try:
         await asyncio.gather(*tarefas)

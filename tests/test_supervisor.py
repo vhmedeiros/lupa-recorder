@@ -433,3 +433,86 @@ class TestIntegracaoComCatalogo:
         resultado = await sup._ciclo(asyncio.Event())
 
         assert resultado.motivo == MotivoParada.processo_morreu
+
+
+class TestIntegracaoComThumbnails:
+    async def test_fonte_tv_gera_thumbnails_e_marca_no_catalogo(self, tmp_path):
+        conn = conectar(tmp_path / "system" / "catalogo.sqlite3")
+        pasta = pasta_do_dia(tmp_path / "data", "tv-teste", None)
+        pasta.mkdir(parents=True, exist_ok=True)
+        (pasta / "170000.ts.part").write_bytes(b"x" * 1000)
+        await asyncio.sleep(0.01)
+        (pasta / "170400.ts.part").write_bytes(b"y" * 500)  # o mais recente, não promove
+
+        chamadas_extrator = []
+
+        def extrator_falso(caminho, destino_dir, segment_seconds):
+            chamadas_extrator.append((caminho, segment_seconds))
+            return [destino_dir / "fake.jpg"]  # não-vazio == sucesso
+
+        relogio = RelogioFalso()
+        stop = asyncio.Event()
+
+        async def sleep_que_para_apos_1(segundos):
+            stop.set()
+            await asyncio.sleep(0)
+
+        launcher = LauncherFalso(lambda: ProcessoFalso())
+        sup = _supervisor(
+            source_overrides={"slug": "tv-teste", "kind": "tv", "protocol": "hls", "url": "https://x.com/live.m3u8"},
+            data_root=tmp_path / "data",
+            launcher=launcher,
+            agora=relogio.agora,
+            sleep=sleep_que_para_apos_1,
+            catalog_conn=conn,
+            system_root=tmp_path / "system",
+            extrator_thumbnails=extrator_falso,
+            watchdog_timeout_s=999999,
+        )
+
+        await sup._ciclo(stop)
+        await asyncio.sleep(0.05)  # dá tempo da tarefa de background (ensure_future) rodar
+
+        assert len(chamadas_extrator) == 1
+        segmentos = listar_segmentos(conn, source_slug="tv-teste")
+        assert segmentos[0].has_thumbnails is True
+        conn.close()
+
+    async def test_fonte_radio_nunca_gera_thumbnails(self, tmp_path):
+        conn = conectar(tmp_path / "system" / "catalogo.sqlite3")
+        pasta = pasta_do_dia(tmp_path / "data", "radio-teste", None)
+        pasta.mkdir(parents=True, exist_ok=True)
+        (pasta / "170000.ts.part").write_bytes(b"x" * 1000)
+        await asyncio.sleep(0.01)
+        (pasta / "170400.ts.part").write_bytes(b"y" * 500)
+
+        chamadas_extrator = []
+
+        def extrator_falso(caminho, destino_dir, segment_seconds):
+            chamadas_extrator.append(caminho)
+            return [destino_dir / "fake.jpg"]
+
+        relogio = RelogioFalso()
+        stop = asyncio.Event()
+
+        async def sleep_que_para_apos_1(segundos):
+            stop.set()
+            await asyncio.sleep(0)
+
+        launcher = LauncherFalso(lambda: ProcessoFalso())
+        sup = _supervisor(
+            data_root=tmp_path / "data",  # FONTE_RADIO por padrão
+            launcher=launcher,
+            agora=relogio.agora,
+            sleep=sleep_que_para_apos_1,
+            catalog_conn=conn,
+            system_root=tmp_path / "system",
+            extrator_thumbnails=extrator_falso,
+            watchdog_timeout_s=999999,
+        )
+
+        await sup._ciclo(stop)
+        await asyncio.sleep(0.05)
+
+        assert chamadas_extrator == []
+        conn.close()
