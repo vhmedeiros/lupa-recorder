@@ -10,6 +10,7 @@ import argparse
 import asyncio
 import dataclasses
 import json
+import logging
 import shutil
 import signal
 import sys
@@ -201,6 +202,11 @@ def _comando_doctor(args: argparse.Namespace) -> int:
 
 
 def _comando_run(args: argparse.Namespace) -> int:
+    # achado ao vivo (2026-08-28): sem isso, `run_forever`/`_matar` logavam sem hora
+    # nenhuma — reconstruir a linha do tempo de um `kill -9` real exigia adivinhar pela
+    # data de modificação dos arquivos de segmento em vez de olhar o log.
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+
     config_path = Path(args.config)
     channels_path = Path(args.channels)
     try:
