@@ -47,6 +47,10 @@ def remuxar_sync(orfao: Path) -> Path:
         # do que aconteceu.
         detalhe = stderr or f"sem saída de erro (returncode={resultado.returncode})"
         raise RemuxError(f"remux de {orfao.name} falhou: {detalhe}")
+    # achado ao vivo (2026-08-28): sem isso, o .part original ficava pra sempre do lado
+    # do .ts remuxado — duplica espaço em disco e todo `recover` seguinte tentava
+    # remuxar de novo o mesmo órfão, sem nunca convergir.
+    orfao.unlink()
     return destino
 
 

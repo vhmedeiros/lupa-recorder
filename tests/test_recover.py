@@ -1,3 +1,5 @@
+import shutil
+import subprocess
 from datetime import datetime
 from pathlib import Path
 
@@ -10,6 +12,7 @@ from lupa_recorder.catalog.recover import (
     RemuxError,
     reconstruir_catalogo_da_fonte,
     recuperar_orfaos,
+    remuxar_sync,
 )
 
 HOJE = datetime(2026, 8, 28, 17, 0, 0)
@@ -32,6 +35,46 @@ def _criar_arquivo(pasta: Path, nome: str, tamanho: int = 1000) -> Path:
     caminho = pasta / nome
     caminho.write_bytes(b"x" * tamanho)
     return caminho
+
+
+class TestRemuxarSync:
+    """`remuxar_sync` de verdade (não o fake usado no resto do arquivo) — pega o bug real
+    achado ao vivo em 2026-08-28: o remux funcionava, mas o `.part` original nunca era
+    apagado, ficando duplicado ao lado do `.ts` novo pra sempre."""
+
+    def test_remux_bem_sucedido_apaga_o_part_original(self, tmp_path, monkeypatch):
+        orfao = tmp_path / "170000.ts.part"
+        orfao.write_bytes(b"dado-de-teste")
+
+        def ffmpeg_falso(cmd, **kwargs):
+            # simula o ffmpeg "escrevendo" o destino com sucesso
+            destino = Path(cmd[-1])
+            destino.write_bytes(b"remuxado")
+            return subprocess.CompletedProcess(cmd, returncode=0, stdout=b"", stderr=b"")
+
+        monkeypatch.setattr(subprocess, "run", ffmpeg_falso)
+        monkeypatch.setattr(shutil, "which", lambda _: "/usr/bin/ffmpeg")
+
+        destino = remuxar_sync(orfao)
+
+        assert destino == tmp_path / "170000.ts"
+        assert destino.exists()
+        assert not orfao.exists()  # o achado real: isso falhava antes do fix
+
+    def test_remux_falho_mantem_o_part_original(self, tmp_path, monkeypatch):
+        orfao = tmp_path / "170000.ts.part"
+        orfao.write_bytes(b"dado-de-teste")
+
+        def ffmpeg_que_falha(cmd, **kwargs):
+            return subprocess.CompletedProcess(cmd, returncode=1, stdout=b"", stderr=b"erro simulado")
+
+        monkeypatch.setattr(subprocess, "run", ffmpeg_que_falha)
+        monkeypatch.setattr(shutil, "which", lambda _: "/usr/bin/ffmpeg")
+
+        with pytest.raises(RemuxError, match="erro simulado"):
+            remuxar_sync(orfao)
+
+        assert orfao.exists()  # não apaga nada se o remux falhou
 
 
 class TestRecuperarOrfaos:
