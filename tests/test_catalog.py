@@ -41,6 +41,34 @@ def test_conectar_e_idempotente(tmp_path):
     conexao2.close()
 
 
+def test_migracao_adiciona_coluna_em_banco_pre_existente(tmp_path):
+    # achado ao vivo (2026-08-28): um catálogo criado antes da migração 2 (hold_until)
+    # nunca ganhava a coluna, porque CREATE TABLE IF NOT EXISTS não altera tabela que já
+    # existe. Simula exatamente esse banco "antigo" (só migração 1 aplicada) e confirma
+    # que conectar() de novo aplica a 2 sem perder dado nenhum.
+    from lupa_recorder.catalog.db import MIGRACOES
+
+    caminho = tmp_path / "catalogo.sqlite3"
+    banco_antigo = sqlite3.connect(caminho)
+    banco_antigo.executescript(MIGRACOES[0])
+    banco_antigo.execute("PRAGMA user_version = 1")
+    banco_antigo.execute(
+        "INSERT INTO segment (source_slug, path, started_at, bytes, state) "
+        "VALUES ('radio-x', '/x.ts', '2026-08-28T10:00:00', 1000, 'ready')"
+    )
+    banco_antigo.commit()
+    banco_antigo.close()
+
+    conexao = conectar(caminho)
+
+    colunas = [linha[1] for linha in conexao.execute("PRAGMA table_info(segment)").fetchall()]
+    assert "hold_until" in colunas
+    linha = conexao.execute("SELECT * FROM segment WHERE source_slug = 'radio-x'").fetchone()
+    assert linha["bytes"] == 1000  # o dado que já existia não se perdeu
+    assert linha["hold_until"] is None
+    conexao.close()
+
+
 class TestSegment:
     def test_insere_e_lista(self, conn):
         seg = Segment(
