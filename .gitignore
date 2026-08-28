@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# nunca dado de gravação dentro do repo — data_root vive fora (ver agent.toml)
+*.ts
+*.ts.part
+*.sqlite3
+*.db
+agent.toml

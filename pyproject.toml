@@ -1,0 +1,20 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "lupa-recorder"
+version = "0.1.0"
+description = "Gravador autônomo de TV/rádio da plataforma Lupa — captura, catálogo e retenção, sem dependência da Lupa (Django) em runtime."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "ruff>=0.6",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/lupa_recorder"]
