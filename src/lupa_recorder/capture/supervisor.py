@@ -19,6 +19,7 @@ import asyncio
 import enum
 import logging
 import signal
+import sqlite3
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,10 +30,12 @@ from lupa_recorder.capture.segments import (
     garantir_pastas_do_dia,
     padrao_saida_ffmpeg,
     promover_segmentos_prontos,
+    started_at_do_arquivo,
     ultimo_progresso_em,
 )
 from lupa_recorder.capture.strategies import criar_estrategia
 from lupa_recorder.capture.strategies.base import SourceStrategy
+from lupa_recorder.catalog.models import Event, Segment, inserir_segmento, registrar_evento
 from lupa_recorder.config import SourceConfig, UrlResolver
 from lupa_recorder.resolve import criar_resolver
 from lupa_recorder.resolve.base import ResolvedInput, Resolver
@@ -111,6 +114,7 @@ class SourceSupervisor:
         sigterm_grace_s: float = SIGTERM_GRACE_S,
         backoff: BackoffPolicy | None = None,
         flapping: FlappingTracker | None = None,
+        catalog_conn: sqlite3.Connection | None = None,
         sleep=asyncio.sleep,
         agora=time.time,
     ) -> None:
@@ -124,6 +128,9 @@ class SourceSupervisor:
         self.sigterm_grace_s = sigterm_grace_s
         self.backoff = backoff or BackoffPolicy()
         self.flapping = flapping or FlappingTracker()
+        # opcional de propósito: os testes do supervisor não passam catálogo nenhum, e o
+        # laço continua funcionando igual — só não fica nada gravado (log ainda funciona).
+        self.catalog_conn = catalog_conn
         self._sleep = sleep
         self._agora = agora
 
@@ -134,17 +141,28 @@ class SourceSupervisor:
         # "deslocado por fonte" (plano §7.4) — não faz todo mundo reiniciar junto.
         return hash(self.source.id) % max(self.source.segment_seconds, 1)
 
+    def _evento(self, kind: str, message: str, *, nivel: int = logging.WARNING) -> None:
+        """Loga (sempre) e grava no catálogo (se houver um configurado) — mesma linha de
+        auditoria nos dois lugares, sem precisar chamar os dois toda vez."""
+        logger.log(nivel, "fonte %s: %s", self.source.slug, message)
+        if self.catalog_conn is not None:
+            try:
+                registrar_evento(self.catalog_conn, Event(source_slug=self.source.slug, kind=kind, message=message))
+            except sqlite3.Error:
+                logger.exception("fonte %s: falha gravando evento no catálogo", self.source.slug)
+
     async def run_forever(self, stop_event: asyncio.Event) -> None:
         while not stop_event.is_set():
             try:
                 resultado = await self._ciclo(stop_event)
-            except Exception:
+            except Exception as exc:
                 # qualquer coisa inesperada (ffmpeg ausente, bug de resolver, o que for)
                 # não pode derrubar o processo inteiro — as outras fontes continuam
                 # supervisionadas independente desta ter batido um erro que a gente não
                 # previu. Achado de campo real (2026-08-28): ffmpeg faltando no PATH
                 # subia como FileNotFoundError e matava o `asyncio.gather` de todo mundo.
                 logger.exception("fonte %s: erro inesperado no ciclo de captura", self.source.slug)
+                self._evento("erro_inesperado", str(exc), nivel=logging.ERROR)
                 resultado = ResultadoCiclo(
                     motivo=MotivoParada.processo_morreu, tentativas_desde_ultimo_sucesso=self.tentativas
                 )
@@ -165,12 +183,9 @@ class SourceSupervisor:
                 else EstadoSupervisor.reiniciando
             )
             atraso = self.backoff.atraso_para_tentativa(self.tentativas)
-            logger.warning(
-                "fonte %s: parou (%s), tentativa %d, esperando %.0fs",
-                self.source.slug,
-                resultado.motivo,
-                self.tentativas,
-                atraso,
+            self._evento(
+                "restart",
+                f"parou ({resultado.motivo}), tentativa {self.tentativas}, esperando {atraso:.0f}s",
             )
             if atraso:
                 await self._dormir_ou_parar(atraso, stop_event)
@@ -236,7 +251,8 @@ class SourceSupervisor:
                 return MotivoParada.processo_morreu
 
             garantir_pastas_do_dia(self.data_root, self.source.slug)
-            promover_segmentos_prontos(self.data_root, self.source.slug)
+            for promovido in promover_segmentos_prontos(self.data_root, self.source.slug):
+                self._catalogar_segmento(promovido)
             progresso = ultimo_progresso_em(self.data_root, self.source.slug)
             if progresso is not None:
                 ultimo_progresso = max(ultimo_progresso, progresso)
@@ -244,11 +260,7 @@ class SourceSupervisor:
             agora = self._agora()
 
             if agora - ultimo_progresso > self.watchdog_timeout_s:
-                logger.warning(
-                    "fonte %s: sem segmento novo há >%.0fs, matando processo travado",
-                    self.source.slug,
-                    self.watchdog_timeout_s,
-                )
+                self._evento("watchdog", f"sem segmento novo há >{self.watchdog_timeout_s:.0f}s, matando processo travado")
                 await self._matar(processo)
                 return MotivoParada.travado
 
@@ -287,6 +299,29 @@ class SourceSupervisor:
         except TimeoutError:
             # achado de campo (Bloomberg, TV Cultura): SIGTERM sozinho não mata um
             # ffmpeg preso em loop de reconexão morto — precisa escalar.
-            logger.warning("fonte %s: SIGTERM não bastou, escalando pra SIGKILL", self.source.slug)
+            self._evento("sigkill", "SIGTERM não bastou, escalando pra SIGKILL")
             processo.send_signal(signal.SIGKILL)
             await processo.wait()
+
+    def _catalogar_segmento(self, caminho: Path) -> None:
+        if self.catalog_conn is None:
+            return
+        iniciado_em = started_at_do_arquivo(caminho)
+        if iniciado_em is None:
+            return
+        try:
+            inserir_segmento(
+                self.catalog_conn,
+                Segment(
+                    source_slug=self.source.slug,
+                    path=str(caminho),
+                    started_at=iniciado_em,
+                    bytes=caminho.stat().st_size,
+                    archive_profile=self.source.archive_profile,
+                ),
+            )
+        except (sqlite3.Error, FileNotFoundError):
+            # não pode derrubar a captura por causa de um problema no catálogo — o
+            # arquivo em si já está seguro em disco, o catálogo é reconstruível dele
+            # de qualquer jeito (`catalog/recover.py`).
+            logger.exception("fonte %s: falha catalogando %s", self.source.slug, caminho)

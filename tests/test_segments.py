@@ -7,6 +7,7 @@ from lupa_recorder.capture.segments import (
     padrao_saida_ffmpeg,
     pasta_do_dia,
     promover_segmentos_prontos,
+    started_at_do_arquivo,
     ultimo_progresso_em,
 )
 
@@ -113,3 +114,18 @@ def test_listar_parciais_ordenado_por_mtime(tmp_path):
     a = _criar_parcial(pasta, "a.ts.part")  # nome não importa, mtime que ordena
 
     assert listar_parciais(tmp_path, "radio-x", HOJE) == [b, a]
+
+
+class TestStartedAtDoArquivo:
+    def test_extrai_data_e_hora_do_caminho(self, tmp_path):
+        arquivo = pasta_do_dia(tmp_path, "radio-x", HOJE) / "170000.ts"
+        assert started_at_do_arquivo(arquivo) == "2026-08-28T17:00:00"
+
+    def test_nome_fora_do_padrao_devolve_none(self, tmp_path):
+        arquivo = pasta_do_dia(tmp_path, "radio-x", HOJE) / "qualquer-coisa.ts"
+        assert started_at_do_arquivo(arquivo) is None
+
+    def test_arquivo_ainda_part_devolve_none(self, tmp_path):
+        # o padrão só reconhece .ts fechado — .ts.part não é "started_at" ainda confirmado
+        arquivo = pasta_do_dia(tmp_path, "radio-x", HOJE) / "170000.ts.part"
+        assert started_at_do_arquivo(arquivo) is None

@@ -19,13 +19,16 @@ from pathlib import Path
 
 from lupa_recorder import __version__
 from lupa_recorder.capture.supervisor import SourceSupervisor
+from lupa_recorder.catalog.db import conectar
+from lupa_recorder.catalog.models import SegmentState, listar_eventos, listar_segmentos
+from lupa_recorder.catalog.recover import reconstruir_catalogo_da_fonte, recuperar_orfaos
 from lupa_recorder.config import Config, ConfigError
 from lupa_recorder.probe import ProbeError, ResultadoProbe, probe
 
+NOME_ARQUIVO_CATALOGO = "catalog.sqlite3"
+
 COMANDOS_AINDA_NAO_IMPLEMENTADOS = {
-    "status": "sub-etapa 1.4 (catálogo)",
     "doctor": "sub-etapa 1.8 (lista completa) — versão parcial já roda, ver abaixo",
-    "recover": "sub-etapa 1.4 (catálogo)",
     "bench": "sub-etapa 1.8",
 }
 
@@ -39,13 +42,18 @@ def _montar_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--config", default="agent.toml")
     p_run.add_argument("--channels", default="channels.yaml")
 
-    sub.add_parser("status", help="Mostra o estado atual das capturas (sub-etapa 1.4).")
+    p_status = sub.add_parser("status", help="Mostra o estado atual das capturas.")
+    p_status.add_argument("--config", default="agent.toml")
+    p_status.add_argument("--channels", default="channels.yaml")
 
     p_doctor = sub.add_parser("doctor", help="Confere pré-condições da máquina.")
     p_doctor.add_argument("--config", default="agent.toml")
     p_doctor.add_argument("--channels", default="channels.yaml")
 
-    sub.add_parser("recover", help="Varre .part órfão e reconstrói o catálogo (sub-etapa 1.4).")
+    p_recover = sub.add_parser("recover", help="Varre .part órfão e reconstrói o catálogo.")
+    p_recover.add_argument("--config", default="agent.toml")
+    p_recover.add_argument("--channels", default="channels.yaml")
+
     sub.add_parser("bench", help="Mede capture_budget/vad_hours_per_day (sub-etapa 1.8).")
 
     p_probe = sub.add_parser("probe", help="Testa uma URL de fonte e sugere o cadastro em channels.yaml.")
@@ -207,12 +215,8 @@ def _comando_run(args: argparse.Namespace) -> int:
     # data de modificação dos arquivos de segmento em vez de olhar o log.
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
-    config_path = Path(args.config)
-    channels_path = Path(args.channels)
-    try:
-        cfg = Config.load(config_path, channels_path)
-    except ConfigError as exc:
-        print(f"Erro: {exc}", file=sys.stderr)
+    cfg = _carregar_config_ou_falhar(args)
+    if cfg is None:
         return 1
 
     problemas = cfg.validate_environment()
@@ -230,18 +234,92 @@ def _comando_run(args: argparse.Namespace) -> int:
 
 async def _supervisionar_todas_as_fontes(cfg: Config) -> int:
     data_root = cfg.agent.paths.data_root
+    catalog_conn = conectar(cfg.agent.paths.system_root / NOME_ARQUIVO_CATALOGO)
     stop_event = asyncio.Event()
 
     loop = asyncio.get_running_loop()
     for sinal in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sinal, stop_event.set)
 
-    supervisores = [SourceSupervisor(fonte, data_root) for fonte in cfg.channels.sources]
+    # recover roda automaticamente no boot (plano §1.4) — antes do supervisor subir,
+    # nunca ao mesmo tempo (os dois mexendo no mesmo .part seria uma corrida).
+    for fonte in cfg.channels.sources:
+        resultado = recuperar_orfaos(catalog_conn, data_root, fonte.slug)
+        if resultado.recuperados or resultado.descartados:
+            print(
+                f"{fonte.slug}: recover — {len(resultado.recuperados)} recuperado(s), "
+                f"{len(resultado.descartados)} descartado(s)"
+            )
+
+    supervisores = [
+        SourceSupervisor(fonte, data_root, catalog_conn=catalog_conn) for fonte in cfg.channels.sources
+    ]
     for sup in supervisores:
         print(f"iniciando {sup.source.slug} ({sup.source.protocol})")
 
-    await asyncio.gather(*(sup.run_forever(stop_event) for sup in supervisores))
+    try:
+        await asyncio.gather(*(sup.run_forever(stop_event) for sup in supervisores))
+    finally:
+        catalog_conn.close()
     print("parado.")
+    return 0
+
+
+def _carregar_config_ou_falhar(args: argparse.Namespace) -> Config | None:
+    try:
+        return Config.load(Path(args.config), Path(args.channels))
+    except ConfigError as exc:
+        print(f"Erro: {exc}", file=sys.stderr)
+        return None
+
+
+def _comando_status(args: argparse.Namespace) -> int:
+    cfg = _carregar_config_ou_falhar(args)
+    if cfg is None:
+        return 1
+
+    caminho_db = cfg.agent.paths.system_root / NOME_ARQUIVO_CATALOGO
+    if not caminho_db.exists():
+        print("Catálogo ainda não existe — rode `lupa-recorder run` (ou `recover`) primeiro.")
+        return 0
+
+    conn = conectar(caminho_db)
+    try:
+        for fonte in cfg.channels.sources:
+            segmentos = listar_segmentos(conn, source_slug=fonte.slug)
+            prontos = sum(1 for s in segmentos if s.state == SegmentState.ready)
+            parciais = sum(1 for s in segmentos if s.state == SegmentState.partial)
+            print(f"{fonte.slug} ({fonte.protocol}): {len(segmentos)} segmento(s) — {prontos} ready, {parciais} partial")
+            for evento in listar_eventos(conn, source_slug=fonte.slug, limite=3):
+                print(f"    [{evento.kind}] {evento.message}")
+    finally:
+        conn.close()
+    return 0
+
+
+def _comando_recover(args: argparse.Namespace) -> int:
+    cfg = _carregar_config_ou_falhar(args)
+    if cfg is None:
+        return 1
+
+    problemas = cfg.validate_environment()
+    if problemas:
+        for p in problemas:
+            print(f"Erro: {p}", file=sys.stderr)
+        return 1
+
+    conn = conectar(cfg.agent.paths.system_root / NOME_ARQUIVO_CATALOGO)
+    try:
+        for fonte in cfg.channels.sources:
+            resultado = recuperar_orfaos(conn, cfg.agent.paths.data_root, fonte.slug)
+            novos, ja_catalogados = reconstruir_catalogo_da_fonte(conn, cfg.agent.paths.data_root, fonte.slug)
+            print(
+                f"{fonte.slug}: {len(resultado.recuperados)} recuperado(s), "
+                f"{len(resultado.descartados)} descartado(s), catálogo — {novos} novo(s), "
+                f"{ja_catalogados} já cadastrado(s)"
+            )
+    finally:
+        conn.close()
     return 0
 
 
@@ -255,6 +333,10 @@ def main(argv: list[str] | None = None) -> int:
         return _comando_doctor(args)
     if args.comando == "run":
         return _comando_run(args)
+    if args.comando == "status":
+        return _comando_status(args)
+    if args.comando == "recover":
+        return _comando_recover(args)
 
     aviso = COMANDOS_AINDA_NAO_IMPLEMENTADOS.get(args.comando)
     print(f"`lupa-recorder {args.comando}` ainda não está implementado — chega na {aviso}.", file=sys.stderr)

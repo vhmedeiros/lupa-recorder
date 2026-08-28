@@ -16,12 +16,26 @@ sempre prepara hoje E amanhã.
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timedelta
 from pathlib import Path
 
 SUFIXO_PARCIAL = ".part"
 FORMATO_PASTA_DIA = "%Y-%m-%d"
 PADRAO_NOME_SEGMENTO = "%H%M%S.ts" + SUFIXO_PARCIAL
+
+_RE_NOME_SEGMENTO_FECHADO = re.compile(r"^(\d{2})(\d{2})(\d{2})\.ts$")
+
+
+def started_at_do_arquivo(arquivo: Path) -> str | None:
+    """`{AAAA-MM-DD}/HHMMSS.ts` → `"AAAA-MM-DDTHH:MM:SS"` (ISO 8601, sem fuso — o relógio
+    da máquina já é o que importa aqui). `None` se o nome não bate com o padrão que o
+    supervisor gera (arquivo estranho, não é um segmento nosso)."""
+    m = _RE_NOME_SEGMENTO_FECHADO.match(arquivo.name)
+    if not m:
+        return None
+    hh, mm, ss = m.groups()
+    return f"{arquivo.parent.name}T{hh}:{mm}:{ss}"
 
 
 def pasta_base(data_root: Path, slug: str) -> Path:

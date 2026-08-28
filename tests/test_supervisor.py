@@ -10,6 +10,8 @@ from lupa_recorder.capture.supervisor import (
     MotivoParada,
     SourceSupervisor,
 )
+from lupa_recorder.catalog.db import conectar
+from lupa_recorder.catalog.models import SegmentState, listar_eventos, listar_segmentos
 from lupa_recorder.config import SourceConfig
 from lupa_recorder.resolve.base import ResolvedInput
 
@@ -359,3 +361,75 @@ class TestRunForever:
         # parada externa), então só as duas primeiras contam.
         assert sup.tentativas == 2
         assert sup.estado == EstadoSupervisor.parado
+
+
+class TestIntegracaoComCatalogo:
+    async def test_segmento_promovido_vira_linha_no_catalogo(self, tmp_path):
+        conn = conectar(tmp_path / "system" / "catalogo.sqlite3")
+        pasta = pasta_do_dia(tmp_path / "data", "radio-teste", None)
+        pasta.mkdir(parents=True, exist_ok=True)
+        (pasta / "170000.ts.part").write_bytes(b"x" * 1000)
+        await asyncio.sleep(0.01)  # mtime diferente do segundo .part
+        (pasta / "170400.ts.part").write_bytes(b"y" * 500)  # o mais recente, não promove
+
+        relogio = RelogioFalso()
+        stop = asyncio.Event()
+        chamadas = {"n": 0}
+
+        async def sleep_que_para_apos_uma_iteracao(segundos):
+            chamadas["n"] += 1
+            relogio.agora_valor += segundos
+            if chamadas["n"] == 1:
+                stop.set()
+            await asyncio.sleep(0)
+
+        launcher = LauncherFalso(lambda: ProcessoFalso())
+        sup = _supervisor(
+            data_root=tmp_path / "data",
+            launcher=launcher,
+            agora=relogio.agora,
+            sleep=sleep_que_para_apos_uma_iteracao,
+            catalog_conn=conn,
+            watchdog_timeout_s=999999,
+            poll_interval_s=2.0,
+        )
+
+        await sup._ciclo(stop)
+
+        segmentos = listar_segmentos(conn, source_slug="radio-teste")
+        assert len(segmentos) == 1
+        assert segmentos[0].path.endswith("170000.ts")
+        assert segmentos[0].state == SegmentState.ready
+        assert segmentos[0].bytes == 1000
+        conn.close()
+
+    async def test_restart_e_watchdog_viram_evento_no_catalogo(self, tmp_path):
+        conn = conectar(tmp_path / "system" / "catalogo.sqlite3")
+        relogio = RelogioFalso()
+        launcher = LauncherFalso(lambda: ProcessoFalso(morto_desde_o_inicio=True))
+        sup = _supervisor(
+            data_root=tmp_path / "data",
+            launcher=launcher,
+            agora=relogio.agora,
+            sleep=relogio.sleep,
+            catalog_conn=conn,
+        )
+
+        stop = asyncio.Event()
+        await sup._ciclo(stop)  # processo já morre no início — nada de watchdog aqui
+
+        eventos = listar_eventos(conn, source_slug="radio-teste")
+        assert eventos == []  # o evento "restart" só é gravado em run_forever, não em _ciclo isolado
+        conn.close()
+
+    async def test_sem_catalog_conn_nao_quebra_nada(self, tmp_path):
+        # catalog_conn é opcional de propósito — a captura não pode depender de banco.
+        relogio = RelogioFalso()
+        launcher = LauncherFalso(lambda: ProcessoFalso(morto_desde_o_inicio=True))
+        sup = _supervisor(
+            data_root=tmp_path / "data", launcher=launcher, agora=relogio.agora, sleep=relogio.sleep
+        )
+
+        resultado = await sup._ciclo(asyncio.Event())
+
+        assert resultado.motivo == MotivoParada.processo_morreu

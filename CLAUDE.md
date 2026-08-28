@@ -49,6 +49,20 @@ livre.
   2026-08-28, revisar quando fizer sentido.
 - `pytest` + `ruff check .` antes de qualquer commit.
 
+## Testando localmente (sandbox de desenvolvimento) — limitação conhecida
+
+Este ambiente de desenvolvimento não tem `ffmpeg`/`ffprobe`/`yt-dlp` instalados por padrão. Um
+binário estático baixado à parte (`johnvansickle.com`, guardado em `.devbin/`, fora do git) serve
+pra testar interativamente — mas **esse binário específico segfaulta** em qualquer cenário real de
+`ffmpeg` neste sandbox: I/O de rede (qualquer protocolo, HTTP ou HTTPS) e até remux 100% local
+(`-c copy` puro). `curl`/`urllib` funcionam normais (não é bloqueio de rede geral), e o mesmo
+`ffmpeg` processa localmente sem rede nenhuma via `-f lavfi` sem travar — então é algo específico
+desse binário/build interagindo mal com este ambiente, não um bug do código nem do `ffmpeg` em
+geral. **Todo caminho que depende de um `ffmpeg`/`yt-dlp` de verdade rodando (captura real,
+remux de `.part` órfão) precisa de confirmação na máquina de gravação real antes de contar como
+testado de ponta a ponta** — a lógica em volta (parsing, orquestração, catálogo) já é validada por
+teste automatizado com processo/subprocesso falso; só a execução real do binário fica pendente.
+
 ## Atualize a documentação junto
 
 Mesma regra do monorepo Lupa: se o código mudou e o `fase1-gravador-autonomo.md` não reflete isso,
