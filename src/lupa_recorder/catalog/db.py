@@ -21,6 +21,10 @@ CREATE TABLE IF NOT EXISTS segment (
     archive_profile TEXT NOT NULL DEFAULT 'copy',
     has_thumbnails INTEGER NOT NULL DEFAULT 0,
     sha256 TEXT,
+    -- protege contra o GC (§6.4) — "clipado"/"com menção" são conceito de Fase 2/3 (servidor);
+    -- localmente na Fase 1 só existe esse hold manual, gancho pro "sob relato de falha do
+    -- operador" que ainda não tem UI nenhuma, mas o schema já nasce pronto.
+    hold_until TEXT,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     UNIQUE (source_slug, started_at)
 );

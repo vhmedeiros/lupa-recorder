@@ -28,6 +28,7 @@ class Segment:
     archive_profile: str = "copy"
     has_thumbnails: bool = False
     sha256: str | None = None
+    hold_until: str | None = None  # ISO 8601 — protege do GC enquanto no futuro
     id: int | None = None
 
 
@@ -38,8 +39,8 @@ def inserir_segmento(conn: sqlite3.Connection, seg: Segment) -> int:
     cur = conn.execute(
         """
         INSERT INTO segment (source_slug, path, started_at, duration_ms, bytes, state,
-                              archive_profile, has_thumbnails, sha256)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                              archive_profile, has_thumbnails, sha256, hold_until)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT (source_slug, started_at) DO NOTHING
         """,
         (
@@ -52,6 +53,7 @@ def inserir_segmento(conn: sqlite3.Connection, seg: Segment) -> int:
             seg.archive_profile,
             int(seg.has_thumbnails),
             seg.sha256,
+            seg.hold_until,
         ),
     )
     if cur.lastrowid and cur.rowcount:
@@ -74,6 +76,13 @@ def marcar_estado(conn: sqlite3.Connection, source_slug: str, started_at: str, e
     conn.execute(
         "UPDATE segment SET state = ? WHERE source_slug = ? AND started_at = ?",
         (estado.value, source_slug, started_at),
+    )
+
+
+def definir_hold_until(conn: sqlite3.Connection, source_slug: str, started_at: str, hold_until: str | None) -> None:
+    conn.execute(
+        "UPDATE segment SET hold_until = ? WHERE source_slug = ? AND started_at = ?",
+        (hold_until, source_slug, started_at),
     )
 
 
@@ -105,6 +114,7 @@ def _linha_para_segmento(linha: sqlite3.Row) -> Segment:
         archive_profile=linha["archive_profile"],
         has_thumbnails=bool(linha["has_thumbnails"]),
         sha256=linha["sha256"],
+        hold_until=linha["hold_until"],
     )
 
 

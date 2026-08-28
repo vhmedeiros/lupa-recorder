@@ -24,6 +24,7 @@ from lupa_recorder.catalog.models import SegmentState, listar_eventos, listar_se
 from lupa_recorder.catalog.recover import reconstruir_catalogo_da_fonte, recuperar_orfaos
 from lupa_recorder.config import Config, ConfigError
 from lupa_recorder.probe import ProbeError, ResultadoProbe, probe
+from lupa_recorder.retention.gc import executar_loop
 
 NOME_ARQUIVO_CATALOGO = "catalog.sqlite3"
 
@@ -257,8 +258,21 @@ async def _supervisionar_todas_as_fontes(cfg: Config) -> int:
     for sup in supervisores:
         print(f"iniciando {sup.source.slug} ({sup.source.protocol})")
 
+    tier_por_fonte = {fonte.slug: fonte.tier for fonte in cfg.channels.sources}
+    tarefas = [sup.run_forever(stop_event) for sup in supervisores]
+    tarefas.append(
+        executar_loop(
+            catalog_conn,
+            data_root,
+            tier_por_fonte,
+            stop_event,
+            watermark_high=cfg.agent.retention.watermark_high_data,
+            watermark_low=cfg.agent.retention.watermark_low_data,
+        )
+    )
+
     try:
-        await asyncio.gather(*(sup.run_forever(stop_event) for sup in supervisores))
+        await asyncio.gather(*tarefas)
     finally:
         catalog_conn.close()
     print("parado.")
