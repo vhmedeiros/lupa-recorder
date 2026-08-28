@@ -171,6 +171,26 @@ class SourceConfig(BaseModel):
     quality_profile: str | None = Field(
         default=None, description="Ex.: '480p' — só usado por url_resolver=yt_dlp hoje"
     )
+    url_refresh_url: str | None = Field(
+        default=None,
+        description=(
+            "Endpoint HTTP que devolve JSON com a URL fresca — só pra url_resolver=http_refresh. "
+            "Precisa ser um endpoint de API de verdade (visível no Network do navegador como um "
+            "XHR), não a página em si (plano §8.4). Sem isso identificado, a fonte não pode usar "
+            "http_refresh — cadastre como static e atualize a URL à mão enquanto isso."
+        ),
+    )
+    url_refresh_json_path: str = Field(
+        default="url", description="Chave no JSON de url_refresh_url onde a URL fresca está."
+    )
+    refresh_interval_seconds: int = Field(
+        default=2400,
+        gt=0,
+        description=(
+            "Intervalo do refresh periódico — default 40min, dentro da janela 30-45min decidida "
+            "depois do GRV-04 fechar (tolerância real medida: ≥3h)."
+        ),
+    )
     archive_profile: str = "copy"
     tier: Tier = Tier.standard
     transcribable: bool = False
@@ -217,6 +237,16 @@ class SourceConfig(BaseModel):
             raise ValueError(
                 f"fonte {self.slug!r}: protocol=youtube precisa de url_resolver=yt_dlp "
                 "(achado de campo da Fase 0 — não tem formato combinado, precisa resolver via yt-dlp)."
+            )
+        if self.url_resolver == UrlResolver.http_refresh and not self.url_refresh_url:
+            raise ValueError(
+                f"fonte {self.slug!r}: url_resolver=http_refresh precisa de url_refresh_url "
+                "(o endpoint de API que devolve a URL fresca em JSON — plano §8.4). Sem esse "
+                "endpoint identificado, cadastre como url_resolver=static por enquanto."
+            )
+        if self.url_refresh_url and self.url_resolver != UrlResolver.http_refresh:
+            raise ValueError(
+                f"fonte {self.slug!r}: url_refresh_url só faz sentido com url_resolver=http_refresh."
             )
         return self
 

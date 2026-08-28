@@ -1,27 +1,27 @@
 """CLI do lupa-recorder — `lupa-recorder <comando>`.
 
-Nesta sub-etapa (1.1) só `probe` está completo, de propósito (plano §1.1: é a primeira
-ferramenta que quem cadastra uma fonte usa, entrega cedo). Os outros comandos existem no
-menu (pra `--help` já mostrar a forma final), mas avisam claramente que ainda não fazem
-nada — nenhum comando finge funcionar.
+`probe` (1.1) e `run` (1.2) estão completos. `status`/`recover` (1.4) e `bench` (1.8)
+ainda não — avisam claramente que não fazem nada, nenhum comando finge funcionar.
 """
 
 from __future__ import annotations
 
 import argparse
+import asyncio
 import dataclasses
 import json
 import shutil
+import signal
 import sys
 import tempfile
 from pathlib import Path
 
 from lupa_recorder import __version__
+from lupa_recorder.capture.supervisor import SourceSupervisor
 from lupa_recorder.config import Config, ConfigError
 from lupa_recorder.probe import ProbeError, ResultadoProbe, probe
 
 COMANDOS_AINDA_NAO_IMPLEMENTADOS = {
-    "run": "sub-etapa 1.2 (supervisor)",
     "status": "sub-etapa 1.4 (catálogo)",
     "doctor": "sub-etapa 1.8 (lista completa) — versão parcial já roda, ver abaixo",
     "recover": "sub-etapa 1.4 (catálogo)",
@@ -200,6 +200,45 @@ def _comando_doctor(args: argparse.Namespace) -> int:
     return 0
 
 
+def _comando_run(args: argparse.Namespace) -> int:
+    config_path = Path(args.config)
+    channels_path = Path(args.channels)
+    try:
+        cfg = Config.load(config_path, channels_path)
+    except ConfigError as exc:
+        print(f"Erro: {exc}", file=sys.stderr)
+        return 1
+
+    problemas = cfg.validate_environment()
+    if problemas:
+        for p in problemas:
+            print(f"Erro: {p}", file=sys.stderr)
+        return 1
+
+    if not cfg.channels.sources:
+        print("channels.yaml não tem nenhuma fonte cadastrada — nada pra gravar.", file=sys.stderr)
+        return 1
+
+    return asyncio.run(_supervisionar_todas_as_fontes(cfg))
+
+
+async def _supervisionar_todas_as_fontes(cfg: Config) -> int:
+    data_root = cfg.agent.paths.data_root
+    stop_event = asyncio.Event()
+
+    loop = asyncio.get_running_loop()
+    for sinal in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sinal, stop_event.set)
+
+    supervisores = [SourceSupervisor(fonte, data_root) for fonte in cfg.channels.sources]
+    for sup in supervisores:
+        print(f"iniciando {sup.source.slug} ({sup.source.protocol})")
+
+    await asyncio.gather(*(sup.run_forever(stop_event) for sup in supervisores))
+    print("parado.")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = _montar_parser()
     args = parser.parse_args(argv)
@@ -208,6 +247,8 @@ def main(argv: list[str] | None = None) -> int:
         return _comando_probe(args)
     if args.comando == "doctor":
         return _comando_doctor(args)
+    if args.comando == "run":
+        return _comando_run(args)
 
     aviso = COMANDOS_AINDA_NAO_IMPLEMENTADOS.get(args.comando)
     print(f"`lupa-recorder {args.comando}` ainda não está implementado — chega na {aviso}.", file=sys.stderr)

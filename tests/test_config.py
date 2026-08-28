@@ -138,6 +138,26 @@ class TestSourceConfig:
         with pytest.raises(ValidationError, match="slug"):
             SourceConfig(**{**FONTE_HTTP_VALIDA, "slug": "Rádio Teste!"})
 
+    def test_http_refresh_exige_url_refresh_url(self):
+        with pytest.raises(ValidationError, match="url_refresh_url"):
+            SourceConfig(**{**FONTE_HTTP_VALIDA, "url_resolver": "http_refresh"})
+
+    def test_http_refresh_com_url_refresh_url_ok(self):
+        fonte = SourceConfig(
+            **{
+                **FONTE_HTTP_VALIDA,
+                "url_resolver": "http_refresh",
+                "url_refresh_url": "https://exemplo.com/api/fresh-url",
+            }
+        )
+        assert fonte.refresh_interval_seconds == 2400
+
+    def test_url_refresh_url_sem_resolver_http_refresh_rejeitado(self):
+        with pytest.raises(ValidationError, match="url_refresh_url só faz sentido"):
+            SourceConfig(
+                **{**FONTE_HTTP_VALIDA, "url_refresh_url": "https://exemplo.com/api/fresh-url"}
+            )
+
 
 class TestChannelsConfig:
     def test_ids_duplicados_rejeitados(self):

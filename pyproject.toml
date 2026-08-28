@@ -20,8 +20,12 @@ lupa-recorder = "lupa_recorder.cli:main"
 [project.optional-dependencies]
 dev = [
     "pytest>=8",
+    "pytest-asyncio>=0.24",
     "ruff>=0.6",
 ]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/lupa_recorder"]

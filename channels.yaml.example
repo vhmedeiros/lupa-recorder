@@ -29,6 +29,25 @@ sources:
     segment_seconds: 240
     thumbnails: true
 
+  # Exemplo de fonte com token de vida curta (tipo SurferNetwork/Jovem Pan, Fase 0) — só
+  # cadastre url_resolver=http_refresh se identificou um endpoint de API de verdade que
+  # devolve a URL fresca em JSON (visível no Network do navegador como um XHR, não a
+  # página em si). Sem esse endpoint, cadastre como url_resolver=static e atualize a URL
+  # à mão por enquanto — é uma limitação real, não um TODO de código.
+  # - id: 4
+  #   slug: radio-jp-nacional
+  #   kind: radio
+  #   protocol: http
+  #   url: "https://stream-284.surfernetwork.com/algumacoisa"  # primeira URL, será re-resolvida
+  #   url_resolver: http_refresh
+  #   url_refresh_url: "https://provedor.com.br/api/stream-url"  # o endpoint de API
+  #   url_refresh_json_path: url  # chave no JSON de resposta onde a URL fresca está
+  #   refresh_interval_seconds: 2400  # 40min — dentro da janela 30-45min decidida (GRV-04)
+  #   archive_profile: copy
+  #   tier: standard
+  #   segment_seconds: 240
+  #   thumbnails: false
+
   - id: 3
     slug: tv-assembleia
     kind: tv

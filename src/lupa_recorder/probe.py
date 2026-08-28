@@ -348,29 +348,17 @@ def testar_captura(
 def resolver_youtube(url: str, quality_profile: str = "480p") -> tuple[str, str]:
     """Resolve as duas URLs (vídeo + áudio) de uma live do YouTube via yt-dlp — achado de
     campo da Fase 0: lives normalmente não têm formato combinado.
+
+    Wrapper fino sobre `resolve.ytdlp` (mesma lógica que o supervisor usa em produção,
+    plano §8.5) — mapeia `ResolveError` pra `ProbeError`, o tipo de erro deste módulo.
     """
-    if not shutil.which("yt-dlp"):
-        raise ProbeError("yt-dlp não encontrado no PATH — rode o bootstrap.sh primeiro.")
+    from lupa_recorder.resolve.base import ResolveError
+    from lupa_recorder.resolve.ytdlp import resolve_youtube_urls_sync
+
     try:
-        video = subprocess.run(
-            ["yt-dlp", "-g", "-f", f"bestvideo[height<={quality_profile.rstrip('p')}]", url],
-            capture_output=True,
-            text=True,
-            timeout=30,
-            check=True,
-        ).stdout.strip()
-        audio = subprocess.run(
-            ["yt-dlp", "-g", "-f", "bestaudio", url],
-            capture_output=True,
-            text=True,
-            timeout=30,
-            check=True,
-        ).stdout.strip()
-    except subprocess.CalledProcessError as exc:
-        raise ProbeError(f"yt-dlp falhou ao resolver {url}: {exc.stderr}") from exc
-    if not video or not audio:
-        raise ProbeError(f"yt-dlp não devolveu URL de vídeo/áudio pra {url} (live fora do ar?).")
-    return video, audio
+        return resolve_youtube_urls_sync(url, quality_profile)
+    except ResolveError as exc:
+        raise ProbeError(str(exc)) from exc
 
 
 def probe(
