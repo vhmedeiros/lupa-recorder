@@ -8,7 +8,7 @@ import threading
 from datetime import date
 
 from lupa_recorder.http.app import encerrar_servidores, iniciar_servidores
-from lupa_recorder.http.auth import assinar_url
+from lupa_recorder.http.auth import assinar_url, query_escopo_assinada
 
 SEGREDO = "segredo-de-teste-com-mais-de-16-chars"
 HOJE = date.today().isoformat()
@@ -26,7 +26,26 @@ def _req(srv, metodo, caminho, *, corpo=None, headers=None):
 
 
 def _assinado(caminho: str) -> str:
+    """Token de path — status/probe."""
     return assinar_url(SEGREDO, caminho, ttl_s=3600)
+
+
+def _q(slug: str, data: str) -> str:
+    """Token de escopo (fonte, dia) — play/seg/thumbs."""
+    return query_escopo_assinada(SEGREDO, slug, data, ttl_s=3600)
+
+
+def _play(slug: str, data: str) -> str:
+    return f"/v1/play/{slug}/{data}.m3u8?{_q(slug, data)}"
+
+
+def _seg(slug: str, data: str, hhmmss: str) -> str:
+    return f"/v1/seg/{slug}/{data}/{hhmmss}.ts?{_q(slug, data)}"
+
+
+def _thumbs(slug: str, resto: str) -> str:
+    data = resto.split("/")[0].removesuffix(".vtt")
+    return f"/v1/thumbs/{slug}/{resto}?{_q(slug, data)}"
 
 
 # ── health (sem auth) ────────────────────────────────────────────────────────
@@ -66,7 +85,7 @@ def test_status_com_token_ok(servidor):
 
 
 def test_play_dia_corrente_e_event(servidor):
-    status, headers, corpo = _req(servidor, "GET", _assinado(f"/v1/play/radio-x/{HOJE}.m3u8"))
+    status, headers, corpo = _req(servidor, "GET", _play("radio-x", HOJE))
 
     assert status == 200
     assert headers["content-type"] == "application/vnd.apple.mpegurl"
@@ -79,7 +98,7 @@ def test_play_dia_corrente_e_event(servidor):
 
 
 def test_play_dia_passado_e_vod_com_endlist(servidor):
-    status, _, corpo = _req(servidor, "GET", _assinado("/v1/play/radio-x/2020-01-01.m3u8"))
+    status, _, corpo = _req(servidor, "GET", _play("radio-x", "2020-01-01"))
 
     assert status == 200
     texto = corpo.decode()
@@ -88,7 +107,7 @@ def test_play_dia_passado_e_vod_com_endlist(servidor):
 
 
 def test_play_fonte_desconhecida_da_404(servidor):
-    status, _, _ = _req(servidor, "GET", _assinado(f"/v1/play/nao-existe/{HOJE}.m3u8"))
+    status, _, _ = _req(servidor, "GET", _play("nao-existe", HOJE))
     assert status == 404
 
 
@@ -96,7 +115,7 @@ def test_play_fonte_desconhecida_da_404(servidor):
 
 
 def _primeiro_segmento_url(servidor) -> str:
-    _, _, corpo = _req(servidor, "GET", _assinado(f"/v1/play/radio-x/{HOJE}.m3u8"))
+    _, _, corpo = _req(servidor, "GET", _play("radio-x", HOJE))
     for linha in corpo.decode().splitlines():
         if linha.startswith("/v1/seg/"):
             return linha
@@ -133,7 +152,7 @@ def test_segmento_range_invalido_da_416(servidor):
 
 
 def test_segmento_inexistente_da_404(servidor):
-    status, _, _ = _req(servidor, "GET", _assinado(f"/v1/seg/radio-x/{HOJE}/235900.ts"))
+    status, _, _ = _req(servidor, "GET", _seg("radio-x", HOJE, "235900"))
     assert status == 404
 
 
@@ -142,7 +161,7 @@ def test_segmento_inexistente_da_404(servidor):
 
 def test_vtt_do_dia_assina_as_urls_das_imagens(servidor):
     # URL canônica sem pasta do dia — o servidor traduz pra {data}/{data}.vtt no disco
-    status, headers, corpo = _req(servidor, "GET", _assinado(f"/v1/thumbs/tv-y/{HOJE}.vtt"))
+    status, headers, corpo = _req(servidor, "GET", _thumbs("tv-y", f"{HOJE}.vtt"))
 
     assert status == 200
     assert headers["content-type"].startswith("text/vtt")
@@ -162,7 +181,7 @@ def test_vtt_do_dia_assina_as_urls_das_imagens(servidor):
 
 
 def test_sprite_de_hora(servidor):
-    status, headers, corpo = _req(servidor, "GET", _assinado(f"/v1/thumbs/tv-y/{HOJE}/sprites/00.jpg"))
+    status, headers, corpo = _req(servidor, "GET", _thumbs("tv-y", f"{HOJE}/sprites/00.jpg"))
 
     assert status == 200
     assert headers["content-type"] == "image/jpeg"
@@ -170,7 +189,7 @@ def test_sprite_de_hora(servidor):
 
 
 def test_thumbs_com_componente_traversal_da_400(servidor):
-    status, _, _ = _req(servidor, "GET", _assinado("/v1/thumbs/tv-y/a/../b.jpg"))
+    status, _, _ = _req(servidor, "GET", _thumbs("tv-y", "a/../b.jpg"))
     assert status == 400
 
 

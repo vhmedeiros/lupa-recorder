@@ -39,7 +39,12 @@ from lupa_recorder.catalog.models import (
     resumo_segmentos,
 )
 from lupa_recorder.config import Config, SourceConfig
-from lupa_recorder.http.auth import TTL_PADRAO_S, assinar_url, verificar
+from lupa_recorder.http.auth import (
+    TTL_PADRAO_S,
+    query_escopo_assinada,
+    verificar,
+    verificar_escopo,
+)
 from lupa_recorder.http.playlist import EntradaSegmento, montar_playlist
 from lupa_recorder.probe import ProbeError, ResultadoProbe, probe, resultado_para_json
 
@@ -49,11 +54,10 @@ logger = logging.getLogger(__name__)
 REDE_TAILNET = ipaddress.ip_network("100.64.0.0/10")
 SIOCGIFADDR = 0x8915  # ioctl Linux: "me dá o IPv4 desta interface"
 
-TTL_URL_SEGMENTO_S = TTL_PADRAO_S  # segmentos dentro da playlist vivem tanto quanto o token de entrada
-
 ROTA_PLAY = re.compile(r"^/v1/play/([a-z0-9-]+)/(\d{4}-\d{2}-\d{2})\.m3u8$")
 ROTA_SEG = re.compile(r"^/v1/seg/([a-z0-9-]+)/(\d{4}-\d{2}-\d{2})/(\d{6})\.ts$")
 ROTA_THUMBS = re.compile(r"^/v1/thumbs/([a-z0-9-]+)/(.+)$")
+_RE_DATA = re.compile(r"\d{4}-\d{2}-\d{2}")
 _COMPONENTE_SEGURO = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 _TIPO_POR_SUFIXO = {
@@ -98,8 +102,21 @@ def url_playlist_assinada(
     ctx: ContextoServidor, slug: str, data_iso: str, *, ttl_s: int = TTL_PADRAO_S
 ) -> str:
     """`/v1/play/{slug}/{data}.m3u8?e=&s=` — usado pelo `run` pra logar uma URL pronta
-    pra colar no VLC (o critério de aceite da sub-etapa 1.7)."""
-    return assinar_url(ctx.secret, f"/v1/play/{slug}/{data_iso}.m3u8", ttl_s=ttl_s)
+    pra colar no VLC (o critério de aceite da sub-etapa 1.7). O token é de **escopo**
+    `(fonte, dia)` — o mesmo `?e=&s=` cobre a playlist, os segmentos e as miniaturas
+    daquele dia, e a playlist ecoa esse token em cada linha (URLs estáveis entre
+    recargas da playlist `EVENT`)."""
+    query = query_escopo_assinada(ctx.secret, slug, data_iso, ttl_s=ttl_s)
+    return f"/v1/play/{slug}/{data_iso}.m3u8?{query}"
+
+
+def _data_dos_thumbs(resto: str) -> str | None:
+    """A data (= escopo) de um path de miniatura: primeiro componente, ou o stem de
+    `{data}.vtt`."""
+    primeiro = resto.split("/", 1)[0]
+    if primeiro.endswith(".vtt"):
+        primeiro = primeiro[:-4]
+    return primeiro if _RE_DATA.fullmatch(primeiro) else None
 
 
 # ── detecção do IP da tailnet ─────────────────────────────────────────────────
@@ -202,7 +219,7 @@ class _HandlerHttp(BaseHTTPRequestHandler):
         partes = urlsplit(self.path)
         params = {k: v[0] for k, v in parse_qs(partes.query).items()}
         try:
-            self._despachar_get(partes.path, params)
+            self._despachar_get(partes.path, params, partes.query)
         except (BrokenPipeError, ConnectionResetError):
             pass
         except Exception:
@@ -215,7 +232,7 @@ class _HandlerHttp(BaseHTTPRequestHandler):
         partes = urlsplit(self.path)
         params = {k: v[0] for k, v in parse_qs(partes.query).items()}
         try:
-            if not self._auth_ok(partes.path, params):
+            if not self._auth_path_ok(partes.path, params):
                 return
             if partes.path == "/v1/probe":
                 self._rota_probe()
@@ -231,25 +248,43 @@ class _HandlerHttp(BaseHTTPRequestHandler):
             logger.exception("erro tratando POST %s", self.path)
             self._talvez_erro_500()
 
-    def _despachar_get(self, caminho: str, params: dict[str, str]) -> None:
+    def _despachar_get(self, caminho: str, params: dict[str, str], query_bruta: str) -> None:
         if caminho == "/v1/health":
             return self._rota_health()
-        if not self._auth_ok(caminho, params):
-            return
         if caminho == "/v1/status":
-            return self._rota_status()
+            if self._auth_path_ok(caminho, params):
+                self._rota_status()
+            return
         if m := ROTA_PLAY.match(caminho):
-            return self._rota_play(*m.groups())
+            slug, data_iso = m.groups()
+            if self._auth_escopo_ok(slug, data_iso, params):
+                self._rota_play(slug, data_iso, query_bruta)
+            return
         if m := ROTA_SEG.match(caminho):
-            return self._rota_seg(*m.groups())
+            slug, data_iso, hhmmss = m.groups()
+            if self._auth_escopo_ok(slug, data_iso, params):
+                self._rota_seg(slug, data_iso, hhmmss)
+            return
         if m := ROTA_THUMBS.match(caminho):
-            return self._rota_thumbs(*m.groups())
+            slug, resto = m.groups()
+            data_iso = _data_dos_thumbs(resto)
+            if data_iso is None:
+                return self._erro(400, "caminho de miniatura inválido")
+            if self._auth_escopo_ok(slug, data_iso, params):
+                self._rota_thumbs(slug, resto, query_bruta)
+            return
         self._erro(404, "rota desconhecida")
 
-    def _auth_ok(self, caminho: str, params: dict[str, str]) -> bool:
+    def _auth_path_ok(self, caminho: str, params: dict[str, str]) -> bool:
         if verificar(self.ctx.secret, caminho, params):
             return True
         self._erro(401, "token ausente, expirado ou inválido (?e=&s=)")
+        return False
+
+    def _auth_escopo_ok(self, fonte: str, dia: str, params: dict[str, str]) -> bool:
+        if verificar_escopo(self.ctx.secret, fonte, dia, params):
+            return True
+        self._erro(401, "token de escopo ausente, expirado ou inválido (?e=&s=)")
         return False
 
     # -- rotas --
@@ -301,7 +336,7 @@ class _HandlerHttp(BaseHTTPRequestHandler):
             }
         )
 
-    def _rota_play(self, slug: str, data_iso: str) -> None:
+    def _rota_play(self, slug: str, data_iso: str, query_bruta: str) -> None:
         fonte = self.ctx.fonte(slug)
         if fonte is None:
             return self._erro(404, f"fonte {slug!r} não cadastrada")
@@ -321,9 +356,9 @@ class _HandlerHttp(BaseHTTPRequestHandler):
             if seg.state == SegmentState.purged:
                 continue
             hhmmss = seg.started_at.split("T")[1].replace(":", "")
-            url_seg = assinar_url(
-                self.ctx.secret, f"/v1/seg/{slug}/{data_iso}/{hhmmss}.ts", ttl_s=TTL_URL_SEGMENTO_S
-            )
+            # ecoa o mesmo token de escopo do request — URL idêntica em toda recarga da
+            # playlist EVENT (o token cobre `(fonte, dia)`, igual pra todo segmento do dia)
+            url_seg = f"/v1/seg/{slug}/{data_iso}/{hhmmss}.ts?{query_bruta}"
             entradas.append(
                 EntradaSegmento(
                     started_at=datetime.fromisoformat(seg.started_at).astimezone(),
@@ -349,7 +384,7 @@ class _HandlerHttp(BaseHTTPRequestHandler):
             return self._erro(404, "segmento não encontrado")
         self._servir_arquivo(alvo, "video/mp2t")
 
-    def _rota_thumbs(self, slug: str, resto: str) -> None:
+    def _rota_thumbs(self, slug: str, resto: str, query_bruta: str) -> None:
         if slug not in self.ctx.slugs:
             return self._erro(404, f"fonte {slug!r} não cadastrada")
         partes = resto.split("/")
@@ -365,14 +400,15 @@ class _HandlerHttp(BaseHTTPRequestHandler):
         if alvo is None or not alvo.is_file():
             return self._erro(404, "miniatura não encontrada")
         if alvo.suffix.lower() == ".vtt":
-            return self._servir_vtt(alvo)
+            return self._servir_vtt(alvo, query_bruta)
         self._servir_arquivo(alvo, _TIPO_POR_SUFIXO.get(alvo.suffix.lower(), "application/octet-stream"))
 
-    def _servir_vtt(self, caminho: Path) -> None:
+    def _servir_vtt(self, caminho: Path, query_bruta: str) -> None:
         """O VTT que o `thumbs/manager.py` grava tem URLs de sprite/miniatura sem token —
-        o servidor assina cada uma na saída, igual o `/v1/play` faz com os segmentos.
-        Sem isso o player recebe o VTT mas toma 401 em toda imagem da filmstrip
-        (bug pego na validação de campo 2026-08-29). VTT é pequeno (≤~40KB) — sem Range."""
+        o servidor ecoa o mesmo token de escopo do request em cada uma (o token cobre
+        `(fonte, dia)`, então vale pras imagens do mesmo dia). Sem isso o player recebe
+        o VTT mas toma 401 em toda imagem da filmstrip (bug de campo 2026-08-29). VTT é
+        pequeno (≤~40KB) — sem Range."""
         try:
             texto = caminho.read_text()
         except OSError:
@@ -381,8 +417,7 @@ class _HandlerHttp(BaseHTTPRequestHandler):
         for linha in texto.splitlines():
             if linha.startswith("/v1/thumb"):
                 base, _, frag = linha.partition("#")
-                assinada = assinar_url(self.ctx.secret, base, ttl_s=TTL_URL_SEGMENTO_S)
-                linha = assinada + (f"#{frag}" if frag else "")
+                linha = f"{base}?{query_bruta}" + (f"#{frag}" if frag else "")
             linhas.append(linha)
         self._corpo(("\n".join(linhas) + "\n").encode(), "text/vtt; charset=utf-8")
 
