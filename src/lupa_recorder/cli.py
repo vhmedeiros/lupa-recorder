@@ -8,13 +8,13 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import dataclasses
 import json
 import logging
 import shutil
 import signal
 import sys
 import tempfile
+from datetime import date
 from pathlib import Path
 
 from lupa_recorder import __version__
@@ -23,7 +23,13 @@ from lupa_recorder.catalog.db import conectar
 from lupa_recorder.catalog.models import SegmentState, listar_eventos, listar_segmentos
 from lupa_recorder.catalog.recover import reconstruir_catalogo_da_fonte, recuperar_orfaos
 from lupa_recorder.config import Config, ConfigError
-from lupa_recorder.probe import ProbeError, ResultadoProbe, probe
+from lupa_recorder.http.app import (
+    ContextoServidor,
+    encerrar_servidores,
+    iniciar_servidores,
+    url_playlist_assinada,
+)
+from lupa_recorder.probe import ProbeError, ResultadoProbe, probe, resultado_para_json
 from lupa_recorder.retention.gc import executar_loop as executar_loop_gc
 from lupa_recorder.thumbs.manager import executar_loop as executar_loop_thumbs
 
@@ -40,7 +46,7 @@ def _montar_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"lupa-recorder {__version__}")
     sub = parser.add_subparsers(dest="comando", required=True)
 
-    p_run = sub.add_parser("run", help="Roda o supervisor de captura (sub-etapa 1.2).")
+    p_run = sub.add_parser("run", help="Grava as fontes do channels.yaml e sobe o HTTP local (:8383).")
     p_run.add_argument("--config", default="agent.toml")
     p_run.add_argument("--channels", default="channels.yaml")
 
@@ -99,7 +105,7 @@ def _comando_probe(args: argparse.Namespace) -> int:
             return 1
 
     if args.json:
-        print(json.dumps(_resultado_para_json(resultado), ensure_ascii=False, indent=2))
+        print(json.dumps(resultado_para_json(resultado), ensure_ascii=False, indent=2))
     else:
         _imprimir_resultado_probe(resultado)
 
@@ -109,14 +115,6 @@ def _comando_probe(args: argparse.Namespace) -> int:
 def _channels_path_ao_lado_do_agent(agent_path: Path) -> Path:
     candidato = agent_path.parent / "channels.yaml"
     return candidato
-
-
-def _resultado_para_json(r: ResultadoProbe) -> dict:
-    d = dataclasses.asdict(r)
-    d["gb_por_dia_projetado"] = r.gb_por_dia_projetado
-    d["cabe_no_disco"] = r.cabe_no_disco
-    d["cadastro_sugerido"] = r.cadastro_sugerido()
-    return d
 
 
 def _imprimir_resultado_probe(r: ResultadoProbe) -> None:
@@ -277,9 +275,28 @@ async def _supervisionar_todas_as_fontes(cfg: Config) -> int:
     if slugs_tv:
         tarefas.append(executar_loop_thumbs(system_root, slugs_tv, stop_event))
 
+    # HTTP local (sub-etapa 1.7) — servidores síncronos em threads próprias, isolados do
+    # event loop da captura: um request travado não estagna a vigilância ("a captura
+    # sempre ganha"). Abrem a própria conexão só-leitura no catálogo (SQLite não é
+    # thread-safe entre conexões compartilhadas).
+    ctx = ContextoServidor(
+        config=cfg,
+        caminho_catalogo=cfg.agent.paths.system_root / NOME_ARQUIVO_CATALOGO,
+    )
+    servidores: list = []
     try:
+        servidores = iniciar_servidores(ctx)
+        hoje = date.today().isoformat()
+        base = f"http://{servidores[0].server_address[0]}:{servidores[0].server_address[1]}"
+        for srv in servidores:
+            print(f"HTTP local escutando em http://{srv.server_address[0]}:{srv.server_address[1]}/v1/")
+        for fonte in cfg.channels.sources:
+            url = url_playlist_assinada(ctx, fonte.slug, hoje, ttl_s=24 * 3600)
+            print(f"  playlist de hoje ({fonte.slug}): {base}{url}", flush=True)
+
         await asyncio.gather(*tarefas)
     finally:
+        encerrar_servidores(servidores)
         catalog_conn.close()
     print("parado.")
     return 0

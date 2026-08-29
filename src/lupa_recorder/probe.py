@@ -12,6 +12,7 @@ internet/serviço de terceiro).
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import re
 import shutil
@@ -122,6 +123,18 @@ class ResultadoProbe:
         if self.rendition_recomendada and self.rendition_recomendada.resolution:
             sugestao["quality_profile"] = self.rendition_recomendada.resolution
         return sugestao
+
+
+def resultado_para_json(r: ResultadoProbe) -> dict:
+    """Serializa um `ResultadoProbe` para dict JSON-safe — inclui as `@property`
+    derivadas (`dataclasses.asdict` não pega). Usado pelo `probe --json` do CLI e pelo
+    `POST /v1/probe` da HTTP local (sub-etapa 1.7), que devem devolver exatamente o
+    mesmo formato pra tela da Lupa consumir de qualquer um dos dois."""
+    d = dataclasses.asdict(r)
+    d["gb_por_dia_projetado"] = r.gb_por_dia_projetado
+    d["cabe_no_disco"] = r.cabe_no_disco
+    d["cadastro_sugerido"] = r.cadastro_sugerido()
+    return d
 
 
 # ── lógica pura (testável sem rede) ─────────────────────────────────────────────

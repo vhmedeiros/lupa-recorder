@@ -20,9 +20,17 @@ máquinas com ciclo de release próprio, precisa ser leve).
 
 ## Status
 
-⬜ Sub-etapa 0 (esqueleto do repo) em andamento. Nada funcional ainda — ver
+🟡 Fase 1 em andamento. Concluídas: esqueleto (0), config/CLI/`probe` (1.1), supervisor +
+estratégias de rede (1.2), catálogo SQLite + `recover` (1.4), GC por pressão + dois volumes (1.5),
+miniaturas (1.6), HTTP local (1.7). Falta a 1.8 (empacotamento/bootstrap/`doctor`/`bench`) e o
+teste de campo de 72h. DVB (1.3) adiado (GRV-01). 206 testes. Ver
 [`fase1-gravador-autonomo.md`](https://github.com/vhmedeiros/Lupa/blob/main/docs/gravacao-tv-radio/fase1-gravador-autonomo.md)
 pro checklist completo.
+
+O `lupa-recorder run` grava as fontes do `channels.yaml` **e** sobe o servidor HTTP local
+(`http://127.0.0.1:8383/v1/` + IP da tailnet) — playlist sintética, segmentos com Range,
+miniaturas, `probe`. No boot ele loga uma URL de playlist já assinada por fonte, pronta pra abrir
+no VLC.
 
 ## Setup de desenvolvimento
 

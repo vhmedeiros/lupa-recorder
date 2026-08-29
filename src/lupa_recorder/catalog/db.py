@@ -86,3 +86,18 @@ def conectar(caminho_db: Path) -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys=ON")
     _aplicar_migracoes(conn)
     return conn
+
+
+def conectar_leitura(caminho_db: Path) -> sqlite3.Connection:
+    """Conexão só-leitura, sem migração e sem criar arquivo — para o servidor HTTP
+    (sub-etapa 1.7), que abre uma conexão curta por request num thread próprio (SQLite
+    não é thread-safe entre conexões compartilhadas). Quem chama garante que o arquivo
+    existe; o `run` já rodou `conectar()` e aplicou o schema. `PRAGMA query_only` é a
+    trava: nem o servidor nem um bug nele conseguem escrever no catálogo da captura.
+    """
+    if not caminho_db.exists():
+        raise FileNotFoundError(caminho_db)
+    conn = sqlite3.connect(caminho_db, isolation_level=None)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA query_only=ON")
+    return conn

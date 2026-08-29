@@ -78,6 +78,24 @@ class SecurityConfig(BaseModel):
     hmac_secret: str = Field(min_length=16, description="Segredo do auth HMAC da HTTP local (sub-etapa 1.7)")
 
 
+class HttpConfig(BaseModel):
+    """Servidor HTTP local do agente (sub-etapa 1.7, plano §11.3). Escuta em 127.0.0.1
+    E no IP da tailnet, nunca em 0.0.0.0 (plano §10) — o IP da tailnet é autodetectado
+    (`tailscale ip -4`, com fallback), ou fixado aqui quando a detecção não serve."""
+
+    port: int = Field(8383, gt=0, lt=65536)
+    bind_tailnet: bool = Field(
+        default=True,
+        description="Também escutar no IP da tailnet além do loopback. Desligar só faz "
+        "sentido em teste local, onde não há tailnet.",
+    )
+    tailnet_ip: str | None = Field(
+        default=None,
+        description="Fixa o IP da tailnet em que escutar, pulando a autodetecção. "
+        "Normalmente desnecessário — o agente roda `tailscale ip -4`.",
+    )
+
+
 class AgentConfig(BaseSettings):
     """Carrega de um agent.toml. Também aceita override por variável de ambiente
     (prefixo LUPA_RECORDER_, ex.: LUPA_RECORDER_AGENT__NAME=foo) — útil em teste/systemd,
@@ -94,6 +112,7 @@ class AgentConfig(BaseSettings):
     paths: PathsConfig
     retention: RetentionWatermarks = Field(default_factory=RetentionWatermarks)
     security: SecurityConfig
+    http: HttpConfig = Field(default_factory=HttpConfig)
 
     @classmethod
     def settings_customise_sources(

@@ -19,3 +19,10 @@ watermark_low_data = 0.70
 [security]
 # gere um de verdade: python -c "import secrets; print(secrets.token_urlsafe(32))"
 hmac_secret = "troque-isto-por-um-segredo-real-de-pelo-menos-16-caracteres"
+
+[http]
+# Servidor HTTP local (sub-etapa 1.7) — playlist sintética, segmentos, miniaturas, probe.
+# Escuta em 127.0.0.1 E no IP da tailnet (autodetectado via `tailscale ip -4`), nunca 0.0.0.0.
+port = 8383
+# bind_tailnet = true       # desligar só em teste local, onde não há tailnet
+# tailnet_ip = "100.x.y.z"  # fixa o IP da tailnet, pulando a autodetecção

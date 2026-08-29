@@ -109,6 +109,32 @@ def listar_segmentos(
     return [_linha_para_segmento(linha) for linha in linhas]
 
 
+def listar_segmentos_do_dia(
+    conn: sqlite3.Connection, source_slug: str, data_iso: str, *, incluir_purgados: bool = False
+) -> list[Segment]:
+    """Segmentos de uma fonte num dia civil (`data_iso` = `AAAA-MM-DD`), ordenados por
+    início — o que a playlist sintética da 1.7 (`/v1/play/{fonte}/{dia}.m3u8`) consome.
+    `started_at` é gravado como `AAAA-MM-DDTHH:MM:SS` (`capture/segments.py`), então o
+    `LIKE 'AAAA-MM-DDT%'` casa o dia inteiro sem depender de função de data do SQLite."""
+    query = "SELECT * FROM segment WHERE source_slug = ? AND started_at LIKE ?"
+    params: list[object] = [source_slug, f"{data_iso}T%"]
+    if not incluir_purgados:
+        query += " AND state != 'purged'"
+    query += " ORDER BY started_at"
+    return [_linha_para_segmento(linha) for linha in conn.execute(query, params).fetchall()]
+
+
+def resumo_segmentos(conn: sqlite3.Connection, source_slug: str) -> tuple[int, str | None]:
+    """`(total_nao_purgado, started_at_do_mais_recente)` — o que o `/v1/status` da 1.7
+    mostra por fonte, sem carregar milhares de linhas só pra contar."""
+    linha = conn.execute(
+        "SELECT COUNT(*) AS n, MAX(started_at) AS ultimo FROM segment "
+        "WHERE source_slug = ? AND state != 'purged'",
+        (source_slug,),
+    ).fetchone()
+    return (linha["n"], linha["ultimo"])
+
+
 def _linha_para_segmento(linha: sqlite3.Row) -> Segment:
     return Segment(
         id=linha["id"],
