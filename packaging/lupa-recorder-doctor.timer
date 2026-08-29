@@ -1,0 +1,13 @@
+# Dispara o lupa-recorder-doctor.service a cada 15 min (e 2 min depois do boot).
+# `enable`d pelo bootstrap.sh; independe do serviço de captura estar rodando.
+
+[Unit]
+Description=roda o lupa-recorder doctor a cada 15 min
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=15min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

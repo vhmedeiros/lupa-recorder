@@ -1,0 +1,30 @@
+# lupa-recorder — gravador autônomo de TV/rádio (sub-etapa 1.8).
+# Instalado por bootstrap.sh em /etc/systemd/system/. O binário mora num release
+# versionado; o symlink `current` é trocado pelo install-release.sh.
+
+[Unit]
+Description=lupa-recorder — gravador autônomo de TV/rádio da Lupa
+Documentation=https://github.com/vhmedeiros/Lupa/blob/main/docs/gravacao-tv-radio/fase1-gravador-autonomo.md
+After=network-online.target chrony.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=lupa
+Group=lupa
+WorkingDirectory=/var/lib/lupa-recorder
+ExecStart=/opt/lupa-recorder/current/bin/lupa-recorder run
+# processo volta sozinho depois de crash OU de queda de energia (com o recover no boot).
+Restart=always
+RestartSec=5
+# a captura -c copy é leve, mas nunca deve disputar CPU com o resto do sistema.
+Nice=5
+# teto de memória — o agente é enxuto; acima disso é vazamento, melhor reiniciar.
+MemoryMax=2G
+# o `run` trata SIGINT/SIGTERM: para os supervisores, promove o último .part, fecha o catálogo.
+KillSignal=SIGTERM
+TimeoutStopSec=30
+# journald é limitado por drop-in (packaging/journald-lupa-recorder.conf).
+
+[Install]
+WantedBy=multi-user.target

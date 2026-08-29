@@ -58,7 +58,33 @@ def test_health_responde_sem_token(servidor):
     dados = json.loads(corpo)
     assert dados["status"] in ("ok", "degraded")
     assert "uptime_s" in dados
+    assert "doctor" in dados  # último resultado do timer systemd (null se nunca rodou)
     assert headers["content-type"].startswith("application/json")
+
+
+def test_health_reporta_ultimo_doctor(contexto):
+    # o timer systemd roda `doctor`, que grava um evento kind="doctor" no catálogo;
+    # o /v1/health devolve a linha mais recente
+    import threading
+
+    from lupa_recorder.catalog.db import conectar
+    from lupa_recorder.catalog.models import Event, registrar_evento
+    from lupa_recorder.http.app import criar_servidor
+
+    conn = conectar(contexto.caminho_catalogo)
+    registrar_evento(conn, Event(kind="doctor", message="doctor: verde — 9 ok, 2 aviso(s)"))
+    conn.close()
+
+    srv = criar_servidor(contexto, "127.0.0.1", 0)
+    t = threading.Thread(target=srv.serve_forever, daemon=True)
+    t.start()
+    try:
+        _, _, corpo = _req(srv, "GET", "/v1/health")
+        assert json.loads(corpo)["doctor"] == "doctor: verde — 9 ok, 2 aviso(s)"
+    finally:
+        srv.shutdown()
+        srv.server_close()
+        t.join(timeout=5)
 
 
 def test_cors_liberado_em_toda_resposta(servidor):

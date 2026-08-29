@@ -1,0 +1,17 @@
+# Roda `lupa-recorder doctor` periodicamente (disparado pelo .timer irmão, ajuste
+# 2026-08-28). O doctor grava o resultado como evento no catálogo — é isso que o
+# /v1/health da HTTP local (1.7) devolve, sem precisar de mais nada.
+#
+# Sai 1 em caso de falha, de propósito: `systemctl status` / o monitoramento veem
+# a unit como `failed`. O timer roda de novo no próximo ciclo independente disso.
+
+[Unit]
+Description=lupa-recorder doctor — checagem periódica de pré-condições
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=lupa
+Group=lupa
+WorkingDirectory=/var/lib/lupa-recorder
+ExecStart=/opt/lupa-recorder/current/bin/lupa-recorder doctor

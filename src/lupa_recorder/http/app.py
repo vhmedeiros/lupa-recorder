@@ -310,10 +310,23 @@ class _HandlerHttp(BaseHTTPRequestHandler):
         if not all(shutil.which(t) for t in ("ffmpeg", "ffprobe")):
             problemas.append("ffmpeg/ffprobe ausente do PATH")
         ok = not problemas
-        self._json(
-            {"status": "ok" if ok else "degraded", "problemas": problemas, "uptime_s": self._uptime()},
-            status=200 if ok else 503,
-        )
+        corpo = {
+            "status": "ok" if ok else "degraded",
+            "problemas": problemas,
+            "uptime_s": self._uptime(),
+            "doctor": self._ultimo_doctor(),  # último resultado do timer systemd (1.8)
+        }
+        self._json(corpo, status=200 if ok else 503)
+
+    def _ultimo_doctor(self) -> str | None:
+        conn = self.ctx.abrir_catalogo()
+        if conn is None:
+            return None
+        try:
+            eventos = listar_eventos(conn, limite=50)
+        finally:
+            conn.close()
+        return next((e.message for e in eventos if e.kind == "doctor"), None)
 
     def _rota_status(self) -> None:
         paths = self.ctx.config.agent.paths

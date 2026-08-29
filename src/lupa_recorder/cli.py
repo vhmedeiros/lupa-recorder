@@ -1,7 +1,7 @@
 """CLI do lupa-recorder — `lupa-recorder <comando>`.
 
-`probe` (1.1) e `run` (1.2) estão completos. `status`/`recover` (1.4) e `bench` (1.8)
-ainda não — avisam claramente que não fazem nada, nenhum comando finge funcionar.
+`probe`/`run`/`status`/`recover`/`doctor`/`bench` completos. `scan`/`signal` (DVB) não
+existem — só fazem sentido quando a placa existir (GRV-01).
 """
 
 from __future__ import annotations
@@ -10,7 +10,6 @@ import argparse
 import asyncio
 import json
 import logging
-import shutil
 import signal
 import sys
 import tempfile
@@ -18,11 +17,26 @@ from datetime import date
 from pathlib import Path
 
 from lupa_recorder import __version__
+from lupa_recorder.bench import escrever as escrever_bench
+from lupa_recorder.bench import rodar_bench
 from lupa_recorder.capture.supervisor import SourceSupervisor
 from lupa_recorder.catalog.db import conectar
-from lupa_recorder.catalog.models import SegmentState, listar_eventos, listar_segmentos
+from lupa_recorder.catalog.models import (
+    Event,
+    SegmentState,
+    listar_eventos,
+    listar_segmentos,
+    registrar_evento,
+)
 from lupa_recorder.catalog.recover import reconstruir_catalogo_da_fonte, recuperar_orfaos
 from lupa_recorder.config import Config, ConfigError
+from lupa_recorder.health.checks import (
+    Status,
+    checar_relogio,
+    linha_de_evento,
+    resumir,
+    rodar_todas,
+)
 from lupa_recorder.http.app import (
     ContextoServidor,
     encerrar_servidores,
@@ -35,10 +49,9 @@ from lupa_recorder.thumbs.manager import executar_loop as executar_loop_thumbs
 
 NOME_ARQUIVO_CATALOGO = "catalog.sqlite3"
 
-COMANDOS_AINDA_NAO_IMPLEMENTADOS = {
-    "doctor": "sub-etapa 1.8 (lista completa) — versão parcial já roda, ver abaixo",
-    "bench": "sub-etapa 1.8",
-}
+# Comandos DVB — só fazem sentido quando a placa existir (GRV-01). Ficam registrados
+# pra dar uma mensagem clara em vez de "invalid choice" do argparse.
+COMANDOS_DVB = {"scan", "signal"}
 
 
 def _montar_parser() -> argparse.ArgumentParser:
@@ -49,20 +62,36 @@ def _montar_parser() -> argparse.ArgumentParser:
     p_run = sub.add_parser("run", help="Grava as fontes do channels.yaml e sobe o HTTP local (:8383).")
     p_run.add_argument("--config", default="agent.toml")
     p_run.add_argument("--channels", default="channels.yaml")
+    p_run.add_argument(
+        "--ignorar-relogio",
+        action="store_true",
+        help="Sobe a captura mesmo com o relógio fora de sincronia (default: recusa — gap 2).",
+    )
 
     p_status = sub.add_parser("status", help="Mostra o estado atual das capturas.")
     p_status.add_argument("--config", default="agent.toml")
     p_status.add_argument("--channels", default="channels.yaml")
 
-    p_doctor = sub.add_parser("doctor", help="Confere pré-condições da máquina.")
+    p_doctor = sub.add_parser("doctor", help="Confere as pré-condições da máquina.")
     p_doctor.add_argument("--config", default="agent.toml")
     p_doctor.add_argument("--channels", default="channels.yaml")
+    p_doctor.add_argument("--json", action="store_true", help="Saída em JSON.")
+    p_doctor.add_argument(
+        "--sem-rede", action="store_true", help="Pula DNS/tailscale (útil pro timer systemd)."
+    )
 
     p_recover = sub.add_parser("recover", help="Varre .part órfão e reconstrói o catálogo.")
     p_recover.add_argument("--config", default="agent.toml")
     p_recover.add_argument("--channels", default="channels.yaml")
 
-    sub.add_parser("bench", help="Mede capture_budget/vad_hours_per_day (sub-etapa 1.8).")
+    p_bench = sub.add_parser("bench", help="Mede a capacidade da máquina → system_root/bench.json.")
+    p_bench.add_argument("--config", default="agent.toml")
+    p_bench.add_argument("--channels", default="channels.yaml")
+    p_bench.add_argument("--segundos", type=int, default=60, help="Duração da captura de teste por fonte.")
+    p_bench.add_argument("--fontes", help="Só estas fontes (slugs separados por vírgula).")
+
+    for dvb in sorted(COMANDOS_DVB):
+        sub.add_parser(dvb, help="DVB — indisponível até a placa existir (GRV-01).")
 
     p_probe = sub.add_parser("probe", help="Testa uma URL de fonte e sugere o cadastro em channels.yaml.")
     p_probe.add_argument("url")
@@ -161,52 +190,48 @@ def _imprimir_resultado_probe(r: ResultadoProbe) -> None:
         print(f"    {chave:<16} {valor}")
 
 
+def _carregar_config_tolerante(args: argparse.Namespace) -> tuple[Config | None, str | None]:
+    try:
+        return Config.load(Path(args.config), Path(args.channels)), None
+    except ConfigError as exc:
+        return None, str(exc)
+
+
 def _comando_doctor(args: argparse.Namespace) -> int:
-    print("== lupa-recorder doctor (versão parcial — completa na sub-etapa 1.8) ==\n")
-    problemas: list[str] = []
+    cfg, erro = _carregar_config_tolerante(args)
+    checagens = rodar_todas(cfg, erro_carga_config=erro, incluir_rede=not args.sem_rede)
+    ok, avisos, falhas = resumir(checagens)
 
-    for ferramenta in ("ffmpeg", "ffprobe"):
-        if shutil.which(ferramenta):
-            print(f"✅ {ferramenta} encontrado")
-        else:
-            print(f"❌ {ferramenta} não encontrado no PATH")
-            problemas.append(f"{ferramenta} ausente")
-
-    if shutil.which("yt-dlp"):
-        print("✅ yt-dlp encontrado")
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "resumo": {"ok": ok, "avisos": avisos, "falhas": falhas},
+                    "checagens": [
+                        {"nome": c.nome, "status": str(c.status), "detalhe": c.detalhe}
+                        for c in checagens
+                    ],
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
     else:
-        print("⚠️  yt-dlp não encontrado (só bloqueia fontes protocol=youtube)")
+        print("== lupa-recorder doctor ==\n")
+        for c in checagens:
+            print(f"{c.simbolo} {c.nome}: {c.detalhe}")
+        print(f"\n{ok} ok · {avisos} aviso(s) · {falhas} falha(s)")
 
-    config_path = Path(args.config)
-    channels_path = Path(args.channels)
-    if not config_path.exists():
-        print(f"❌ {config_path} não existe (copie de agent.toml.example)")
-        problemas.append("agent.toml ausente")
-    if not channels_path.exists():
-        print(f"❌ {channels_path} não existe (copie de channels.yaml.example)")
-        problemas.append("channels.yaml ausente")
-
-    if not problemas:
+    # registra o resultado no catálogo (alimenta o /v1/health da 1.7) — best-effort
+    if cfg is not None:
         try:
-            cfg = Config.load(config_path, channels_path)
-            print(f"✅ {config_path} e {channels_path} válidos ({len(cfg.channels.sources)} fonte(s))")
-            ambiente = cfg.validate_environment()
-            if ambiente:
-                for p in ambiente:
-                    print(f"❌ {p}")
-                problemas.extend(ambiente)
-            else:
-                print("✅ data_root e system_root existem e têm espaço")
-        except ConfigError as exc:
-            print(f"❌ {exc}")
-            problemas.append(str(exc))
+            conn = conectar(cfg.agent.paths.system_root / NOME_ARQUIVO_CATALOGO)
+            registrar_evento(conn, Event(kind="doctor", message=linha_de_evento(checagens)))
+            conn.close()
+        except Exception:  # noqa: BLE001 — doctor não pode falhar por causa do catálogo
+            pass
 
-    print()
-    if problemas:
-        print(f"{len(problemas)} problema(s) encontrado(s).")
-        return 1
-    print("Tudo certo (do que já é verificável nesta sub-etapa).")
-    return 0
+    return 1 if falhas else 0
 
 
 def _comando_run(args: argparse.Namespace) -> int:
@@ -229,7 +254,43 @@ def _comando_run(args: argparse.Namespace) -> int:
         print("channels.yaml não tem nenhuma fonte cadastrada — nada pra gravar.", file=sys.stderr)
         return 1
 
+    # gate de relógio (plano §19 gap 2): um gravador com relógio errado nomeia os
+    # segmentos na hora errada e a barra do dia fica mentindo — melhor não gravar.
+    relogio = checar_relogio()
+    if relogio.status == Status.falha and not args.ignorar_relogio:
+        print(f"Erro: relógio fora de sincronia ({relogio.detalhe}).", file=sys.stderr)
+        print("       Espere o chrony convergir, ou rode com --ignorar-relogio.", file=sys.stderr)
+        return 1
+    if relogio.status != Status.ok:
+        logging.warning("relógio: %s", relogio.detalhe)
+
     return asyncio.run(_supervisionar_todas_as_fontes(cfg))
+
+
+def _comando_bench(args: argparse.Namespace) -> int:
+    cfg = _carregar_config_ou_falhar(args)
+    if cfg is None:
+        return 1
+    problemas = cfg.validate_environment()
+    if problemas:
+        for p in problemas:
+            print(f"Erro: {p}", file=sys.stderr)
+        return 1
+
+    slugs = [s.strip() for s in args.fontes.split(",")] if args.fontes else None
+    fontes = [f for f in cfg.channels.sources if slugs is None or f.slug in slugs]
+    if not fontes:
+        print("nenhuma fonte pra medir.", file=sys.stderr)
+        return 1
+
+    print(f"medindo {len(fontes)} fonte(s) por {args.segundos}s cada — pode demorar…")
+    with tempfile.TemporaryDirectory(prefix="lupa-recorder-bench-") as tmp:
+        resultado = rodar_bench(cfg, Path(tmp), segundos=args.segundos, slugs=slugs)
+    alvo = escrever_bench(resultado, cfg.agent.paths.system_root)
+
+    print(json.dumps(resultado.para_json(), ensure_ascii=False, indent=2))
+    print(f"\nescrito em {alvo}")
+    return 0
 
 
 async def _supervisionar_todas_as_fontes(cfg: Config) -> int:
@@ -364,19 +425,24 @@ def main(argv: list[str] | None = None) -> int:
     parser = _montar_parser()
     args = parser.parse_args(argv)
 
-    if args.comando == "probe":
-        return _comando_probe(args)
-    if args.comando == "doctor":
-        return _comando_doctor(args)
-    if args.comando == "run":
-        return _comando_run(args)
-    if args.comando == "status":
-        return _comando_status(args)
-    if args.comando == "recover":
-        return _comando_recover(args)
+    comandos = {
+        "probe": _comando_probe,
+        "doctor": _comando_doctor,
+        "run": _comando_run,
+        "status": _comando_status,
+        "recover": _comando_recover,
+        "bench": _comando_bench,
+    }
+    if args.comando in comandos:
+        return comandos[args.comando](args)
 
-    aviso = COMANDOS_AINDA_NAO_IMPLEMENTADOS.get(args.comando)
-    print(f"`lupa-recorder {args.comando}` ainda não está implementado — chega na {aviso}.", file=sys.stderr)
+    if args.comando in COMANDOS_DVB:
+        print(
+            f"`lupa-recorder {args.comando}` só faz sentido com placa DVB — adiado com GRV-01.",
+            file=sys.stderr,
+        )
+        return 2
+    print(f"`lupa-recorder {args.comando}` não implementado.", file=sys.stderr)
     return 2
 
 
