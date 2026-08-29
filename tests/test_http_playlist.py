@@ -90,6 +90,19 @@ def test_buraco_de_gravacao_vira_discontinuity():
     assert "#EXTINF:1200.000," not in m3u8
 
 
+def test_parcial_curto_seguido_de_retomada_vira_discontinuity():
+    # achado de campo 2026-08-29: 053601.ts gravou só 22s (parcial remuxado), o próximo
+    # veio 68s depois — 46s de buraco real, mas delta (68s) < nominal, então a detecção
+    # por delta sozinha não pegava. Agora pega pelo fim real do segmento.
+    a = EntradaSegmento(datetime(2026, 8, 28, 5, 36, 1, tzinfo=TZ), "/s/a.ts", duration_ms=22130)
+    b = EntradaSegmento(datetime(2026, 8, 28, 5, 37, 9, tzinfo=TZ), "/s/b.ts")
+
+    m3u8 = montar_playlist([a, b], dia_corrente=False, segment_seconds=240)
+
+    assert m3u8.count("#EXT-X-DISCONTINUITY") == 1
+    assert "#EXTINF:22.130," in m3u8
+
+
 def test_ultimo_segmento_do_event_limitado_por_agora():
     inicio = datetime(2026, 8, 28, 12, 0, tzinfo=TZ)
     m3u8 = montar_playlist(

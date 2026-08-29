@@ -364,7 +364,27 @@ class _HandlerHttp(BaseHTTPRequestHandler):
         alvo = resolver_dentro(base, *partes)
         if alvo is None or not alvo.is_file():
             return self._erro(404, "miniatura não encontrada")
+        if alvo.suffix.lower() == ".vtt":
+            return self._servir_vtt(alvo)
         self._servir_arquivo(alvo, _TIPO_POR_SUFIXO.get(alvo.suffix.lower(), "application/octet-stream"))
+
+    def _servir_vtt(self, caminho: Path) -> None:
+        """O VTT que o `thumbs/manager.py` grava tem URLs de sprite/miniatura sem token —
+        o servidor assina cada uma na saída, igual o `/v1/play` faz com os segmentos.
+        Sem isso o player recebe o VTT mas toma 401 em toda imagem da filmstrip
+        (bug pego na validação de campo 2026-08-29). VTT é pequeno (≤~40KB) — sem Range."""
+        try:
+            texto = caminho.read_text()
+        except OSError:
+            return self._erro(404, "não encontrado")
+        linhas = []
+        for linha in texto.splitlines():
+            if linha.startswith("/v1/thumb"):
+                base, _, frag = linha.partition("#")
+                assinada = assinar_url(self.ctx.secret, base, ttl_s=TTL_URL_SEGMENTO_S)
+                linha = assinada + (f"#{frag}" if frag else "")
+            linhas.append(linha)
+        self._corpo(("\n".join(linhas) + "\n").encode(), "text/vtt; charset=utf-8")
 
     def _rota_probe(self) -> None:
         try:

@@ -17,36 +17,30 @@ def _criar_miniatura_de_teste(caminho: Path, cor=(255, 0, 0)) -> Path:
     return caminho
 
 
+def _por_minuto(tmp_path, minutos) -> dict[int, Path]:
+    return {m: _criar_miniatura_de_teste(tmp_path / f"m{m}.jpg") for m in minutos}
+
+
 class TestMontarSpriteDaHora:
-    def test_sprite_60_miniaturas_tem_o_tamanho_certo(self, tmp_path):
-        miniaturas = [_criar_miniatura_de_teste(tmp_path / f"m{i}.jpg") for i in range(60)]
-        destino = tmp_path / "sprites" / "17.jpg"
+    def test_sprite_hora_cheia_tem_o_tamanho_certo(self, tmp_path):
+        montar_sprite_da_hora(_por_minuto(tmp_path, range(60)), tmp_path / "sprites" / "17.jpg")
 
-        montar_sprite_da_hora(miniaturas, destino)
-
-        assert destino.exists()
-        with Image.open(destino) as sprite:
+        with Image.open(tmp_path / "sprites" / "17.jpg") as sprite:
             assert sprite.size == (1600, 540)  # 160×10, 90×6
 
     def test_hora_incompleta_nao_quebra(self, tmp_path):
-        # 20 miniaturas em vez de 60 — comum (fonte começou no meio da hora, alguma
-        # extração falhou) — as células que sobram ficam em branco, não é erro.
-        miniaturas = [_criar_miniatura_de_teste(tmp_path / f"m{i}.jpg") for i in range(20)]
-        destino = tmp_path / "sprites" / "17.jpg"
+        # frames só a partir do minuto 22 (fonte começou no meio da hora) — as células
+        # 0-21 ficam em branco, não é erro; o sprite continua 10×6.
+        montar_sprite_da_hora(_por_minuto(tmp_path, range(22, 60)), tmp_path / "sprites" / "17.jpg")
 
-        montar_sprite_da_hora(miniaturas, destino)
-
-        with Image.open(destino) as sprite:
+        with Image.open(tmp_path / "sprites" / "17.jpg") as sprite:
             assert sprite.size == (1600, 540)
 
-    def test_mais_de_60_ignora_o_excedente(self, tmp_path):
-        miniaturas = [_criar_miniatura_de_teste(tmp_path / f"m{i}.jpg") for i in range(70)]
-        assert len(miniaturas) > CELULAS_POR_SPRITE
-
-        destino = montar_sprite_da_hora(miniaturas, tmp_path / "sprites" / "17.jpg")
+    def test_minuto_fora_de_0_59_e_ignorado(self, tmp_path):
+        destino = montar_sprite_da_hora(_por_minuto(tmp_path, [0, 59, 60, 999]), tmp_path / "s.jpg")
 
         with Image.open(destino) as sprite:
-            assert sprite.size == (1600, 540)  # não cresce além da grade 10×6
+            assert sprite.size == (1600, 540)  # não cresce além da grade
 
 
 class TestCues:
@@ -56,15 +50,14 @@ class TestCues:
         assert cues[1] == "00:01:00.000 --> 00:02:00.000\nhttp://x/sprite.jpg#xywh=160,0,160,90"
 
     def test_gerar_cues_sprite_com_offset_de_hora(self):
-        # achado ao pensar no manager.py: sem offset, toda hora começaria em 00:00 e as
-        # cues de horas diferentes se sobrepunham no VTT do dia inteiro.
         cues = gerar_cues_sprite("http://x/17.jpg", quantidade=1, offset_s=17 * 3600)
         assert cues[0].startswith("17:00:00.000 --> 17:01:00.000")
 
-    def test_gerar_cues_avulsas_com_offset(self):
-        cues = gerar_cues_avulsas(["http://x/a.jpg", "http://x/b.jpg"], offset_s=3600)
-        assert cues[0].startswith("01:00:00.000 --> 01:01:00.000")
-        assert cues[1].startswith("01:01:00.000 --> 01:02:00.000")
+    def test_gerar_cues_avulsas_mapeia_pelo_minuto_real(self):
+        # minuto 47 → cue às 13:47, não sequencial a partir de 0 (bug de campo 2026-08-29)
+        cues = gerar_cues_avulsas({47: "http://x/a.jpg", 48: "http://x/b.jpg"}, offset_s=13 * 3600)
+        assert cues[0].startswith("13:47:00.000 --> 13:48:00.000")
+        assert cues[1].startswith("13:48:00.000 --> 13:49:00.000")
 
     def test_cue_da_decima_primeira_coluna_pula_pra_segunda_linha(self):
         cues = gerar_cues_sprite("http://x/s.jpg", quantidade=11)
@@ -79,3 +72,7 @@ def test_montar_webvtt():
 
 def test_montar_webvtt_sem_cues():
     assert montar_webvtt([]) == "WEBVTT\n"
+
+
+def test_celulas_por_sprite_e_60():
+    assert CELULAS_POR_SPRITE == 60

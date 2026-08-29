@@ -140,13 +140,25 @@ def test_segmento_inexistente_da_404(servidor):
 # ── miniaturas ───────────────────────────────────────────────────────────────
 
 
-def test_vtt_do_dia(servidor):
+def test_vtt_do_dia_assina_as_urls_das_imagens(servidor):
     # URL canônica sem pasta do dia — o servidor traduz pra {data}/{data}.vtt no disco
     status, headers, corpo = _req(servidor, "GET", _assinado(f"/v1/thumbs/tv-y/{HOJE}.vtt"))
 
     assert status == 200
     assert headers["content-type"].startswith("text/vtt")
-    assert corpo.startswith(b"WEBVTT")
+    texto = corpo.decode()
+    assert texto.startswith("WEBVTT")
+    # cada URL de imagem no VTT sai assinada (?e=&s= antes do #fragment), senão o player
+    # toma 401 em toda imagem da filmstrip
+    linha_img = next(ln for ln in texto.splitlines() if ln.startswith("/v1/thumb"))
+    assert "?e=" in linha_img and "&s=" in linha_img
+    assert linha_img.index("?e=") < linha_img.index("#")  # query antes do fragment
+
+    # e a URL assinada realmente serve o sprite
+    url_sprite = linha_img.split("#")[0]
+    status_img, headers_img, _ = _req(servidor, "GET", url_sprite)
+    assert status_img == 200
+    assert headers_img["content-type"] == "image/jpeg"
 
 
 def test_sprite_de_hora(servidor):

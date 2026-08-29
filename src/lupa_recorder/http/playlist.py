@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # Folga entre o espaçamento real de dois segmentos e o nominal (`segment_seconds`) dentro
 # da qual eles ainda contam como contíguos. Acima disso é buraco → DISCONTINUITY. Os
@@ -52,8 +52,12 @@ def _duracoes_e_gaps(
             elif abs(delta - nominal) <= tolerancia_gap_s:
                 dur = delta  # contíguo — o espaçamento real é a duração real
             else:
-                dur = nominal  # gap logo depois, ou relógio estranho — não invento duração
-            if delta > nominal + tolerancia_gap_s:
+                dur = min(delta, nominal) if delta > 0 else nominal
+            # buraco = o próximo segmento começa depois de este ter terminado, com folga.
+            # Pega tanto segmento faltando (delta grande) quanto um parcial curto seguido
+            # de retomada (achado de campo 2026-08-29: 22s de conteúdo, 46s de buraco).
+            fim_deste = entrada.started_at + timedelta(seconds=dur)
+            if (entradas[i + 1].started_at - fim_deste).total_seconds() > tolerancia_gap_s:
                 gap_antes[i + 1] = True
         elif medida is not None:
             dur = medida
