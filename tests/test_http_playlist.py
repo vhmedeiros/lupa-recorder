@@ -31,8 +31,6 @@ def test_dia_passado_e_vod_com_endlist():
     assert "#EXT-X-PLAYLIST-TYPE:VOD" in m3u8
     assert m3u8.rstrip().endswith("#EXT-X-ENDLIST")
     assert m3u8.count("#EXTINF:") == 3
-    assert m3u8.count("#EXT-X-PROGRAM-DATE-TIME:") == 1
-    assert "#EXT-X-PROGRAM-DATE-TIME:2026-08-28T07:00:00.000-03:00" in m3u8
 
 
 def test_dia_corrente_e_event_sem_endlist():
@@ -45,6 +43,21 @@ def test_dia_corrente_e_event_sem_endlist():
 
     assert "#EXT-X-PLAYLIST-TYPE:EVENT" in m3u8
     assert "#EXT-X-ENDLIST" not in m3u8
+
+
+def test_cada_segmento_tem_pdt_e_toda_borda_e_discontinuity():
+    # os .ts são capturados com -reset_timestamps e cortados no relógio → timelines
+    # independentes; sem DISCONTINUITY em cada borda o hls.js trava (bufferStalledError)
+    m3u8 = montar_playlist(
+        _entradas(datetime(2026, 8, 28, 7, 0, tzinfo=TZ), 3),
+        dia_corrente=False,
+        segment_seconds=240,
+    )
+
+    assert m3u8.count("#EXT-X-PROGRAM-DATE-TIME:") == 3  # um por segmento
+    assert m3u8.count("#EXT-X-DISCONTINUITY\n") == 2  # entre os 3 segmentos (não antes do 1º)
+    assert "#EXT-X-PROGRAM-DATE-TIME:2026-08-28T07:00:00.000-03:00" in m3u8
+    assert "#EXT-X-PROGRAM-DATE-TIME:2026-08-28T07:04:00.000-03:00" in m3u8
 
 
 def test_playlist_vazia_ainda_e_valida():
@@ -63,7 +76,6 @@ def test_duracao_vem_do_espacamento_quando_contiguo():
         dia_corrente=False,
         segment_seconds=240,
     )
-    # o 1º segmento: delta pro 2º = 240s exatos → EXTINF:240.000
     assert "#EXTINF:240.000," in m3u8
 
 
@@ -76,31 +88,17 @@ def test_duracao_medida_tem_prioridade():
     assert "#EXTINF:238.500," in m3u8
 
 
-def test_buraco_de_gravacao_vira_discontinuity():
+def test_buraco_grande_cai_no_nominal_nao_no_delta():
     a = EntradaSegmento(datetime(2026, 8, 28, 7, 0, tzinfo=TZ), "/s/a.ts")
     b = EntradaSegmento(datetime(2026, 8, 28, 7, 4, tzinfo=TZ), "/s/b.ts")
-    # 20 min de buraco antes do próximo
-    c = EntradaSegmento(datetime(2026, 8, 28, 7, 24, tzinfo=TZ), "/s/c.ts")
+    c = EntradaSegmento(datetime(2026, 8, 28, 7, 24, tzinfo=TZ), "/s/c.ts")  # 20 min depois
 
     m3u8 = montar_playlist([a, b, c], dia_corrente=False, segment_seconds=240)
 
-    assert m3u8.count("#EXT-X-DISCONTINUITY") == 1
-    assert m3u8.count("#EXT-X-PROGRAM-DATE-TIME:") == 2  # início + reancoragem após o gap
-    # o segmento antes do buraco cai no nominal, não nos 1200s de delta
-    assert "#EXTINF:1200.000," not in m3u8
-
-
-def test_parcial_curto_seguido_de_retomada_vira_discontinuity():
-    # achado de campo 2026-08-29: 053601.ts gravou só 22s (parcial remuxado), o próximo
-    # veio 68s depois — 46s de buraco real, mas delta (68s) < nominal, então a detecção
-    # por delta sozinha não pegava. Agora pega pelo fim real do segmento.
-    a = EntradaSegmento(datetime(2026, 8, 28, 5, 36, 1, tzinfo=TZ), "/s/a.ts", duration_ms=22130)
-    b = EntradaSegmento(datetime(2026, 8, 28, 5, 37, 9, tzinfo=TZ), "/s/b.ts")
-
-    m3u8 = montar_playlist([a, b], dia_corrente=False, segment_seconds=240)
-
-    assert m3u8.count("#EXT-X-DISCONTINUITY") == 1
-    assert "#EXTINF:22.130," in m3u8
+    assert "#EXTINF:1200.000," not in m3u8  # o segmento antes do buraco fica no nominal
+    assert "#EXTINF:240.000," in m3u8
+    # o buraco aparece na timeline pelo salto do PROGRAM-DATE-TIME (7:04 → 7:24)
+    assert "#EXT-X-PROGRAM-DATE-TIME:2026-08-28T07:24:00.000-03:00" in m3u8
 
 
 def test_ultimo_segmento_do_event_limitado_por_agora():
