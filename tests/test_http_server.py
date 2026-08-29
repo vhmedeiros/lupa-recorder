@@ -141,11 +141,20 @@ def test_segmento_inexistente_da_404(servidor):
 
 
 def test_vtt_do_dia(servidor):
+    # URL canônica sem pasta do dia — o servidor traduz pra {data}/{data}.vtt no disco
     status, headers, corpo = _req(servidor, "GET", _assinado(f"/v1/thumbs/tv-y/{HOJE}.vtt"))
 
     assert status == 200
     assert headers["content-type"].startswith("text/vtt")
     assert corpo.startswith(b"WEBVTT")
+
+
+def test_sprite_de_hora(servidor):
+    status, headers, corpo = _req(servidor, "GET", _assinado(f"/v1/thumbs/tv-y/{HOJE}/sprites/00.jpg"))
+
+    assert status == 200
+    assert headers["content-type"] == "image/jpeg"
+    assert corpo.startswith(b"\xff\xd8\xff")
 
 
 def test_thumbs_com_componente_traversal_da_400(servidor):

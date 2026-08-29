@@ -106,9 +106,13 @@ def contexto(ambiente):
     for minuto in (0, 4, 8):
         criar_segmento(conn, data_root, "radio-x", f"{hoje}T00:{minuto:02d}:00")
 
-    thumbs_dir = system_root / "thumbs" / "tv-y"
-    thumbs_dir.mkdir(parents=True)
-    (thumbs_dir / f"{hoje}.vtt").write_text("WEBVTT\n\n00:00:00.000 --> 00:01:00.000\nx.jpg\n")
+    # layout real que o thumbs/manager.py (1.6) gera: VTT dentro da pasta do dia + sprites/
+    dia_thumbs = system_root / "thumbs" / "tv-y" / hoje
+    (dia_thumbs / "sprites").mkdir(parents=True)
+    (dia_thumbs / f"{hoje}.vtt").write_text(
+        f"WEBVTT\n\n00:00:00.000 --> 00:01:00.000\n/v1/thumbs/tv-y/{hoje}/sprites/00.jpg#xywh=0,0,160,90\n"
+    )
+    (dia_thumbs / "sprites" / "00.jpg").write_bytes(b"\xff\xd8\xff\xe0JFIF-fake")
 
     ctx = ContextoServidor(config=cfg, caminho_catalogo=caminho_catalogo, probe_fn=_fake_probe)
     yield ctx

@@ -356,6 +356,11 @@ class _HandlerHttp(BaseHTTPRequestHandler):
         if any(not _COMPONENTE_SEGURO.match(p) for p in partes):
             return self._erro(400, "caminho de miniatura inválido")
         base = self.ctx.config.agent.paths.system_root / "thumbs" / slug
+        # a URL canônica da §11.3 é `/v1/thumbs/{slug}/{data}.vtt`, mas o `thumbs/manager.py`
+        # grava o VTT DENTRO da pasta do dia (`{data}/{data}.vtt`) — traduz aqui. Sprites e
+        # avulsas já vêm com a pasta do dia na URL (o VTT as emite assim), caem no caso geral.
+        if len(partes) == 1 and partes[0].endswith(".vtt"):
+            partes = [partes[0][: -len(".vtt")], partes[0]]
         alvo = resolver_dentro(base, *partes)
         if alvo is None or not alvo.is_file():
             return self._erro(404, "miniatura não encontrada")
