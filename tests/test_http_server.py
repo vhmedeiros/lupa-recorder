@@ -61,6 +61,16 @@ def test_health_responde_sem_token(servidor):
     assert headers["content-type"].startswith("application/json")
 
 
+def test_cors_liberado_em_toda_resposta(servidor):
+    # o Estúdio/hls.js buscam de outra origem — sem isso o browser bloqueia tudo
+    for metodo, caminho in [("GET", "/v1/health"), ("GET", "/v1/status"), ("OPTIONS", "/v1/seg/x/y")]:
+        status, headers, _ = _req(servidor, metodo, caminho)
+        assert headers["access-control-allow-origin"] == "*", (metodo, caminho, status)
+    status_opt, headers_opt, _ = _req(servidor, "OPTIONS", "/v1/play/radio-x/2020-01-01.m3u8")
+    assert status_opt == 204
+    assert "Range" in headers_opt["access-control-allow-headers"]
+
+
 # ── auth ─────────────────────────────────────────────────────────────────────
 
 

@@ -213,7 +213,23 @@ class _HandlerHttp(BaseHTTPRequestHandler):
     def log_message(self, formato: str, *args) -> None:
         logger.debug("%s - %s", self.address_string(), formato % args)
 
+    def end_headers(self) -> None:
+        # CORS liberado: o Estúdio (browser servido pela Lupa) e o hls.js buscam a
+        # playlist/segmentos/miniaturas do agente por outra origem. Seguro aqui — o
+        # agente só é alcançável pela tailnet e toda rota (menos /v1/health) exige o
+        # token HMAC na URL; `*` não expõe nada que o token já não proteja.
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Range")
+        self.send_header("Access-Control-Expose-Headers", "Content-Range, Content-Length, Accept-Ranges")
+        super().end_headers()
+
     # -- dispatch --
+
+    def do_OPTIONS(self) -> None:  # noqa: N802 — preflight do browser (Range dispara CORS preflight)
+        self.send_response(204)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
     def do_GET(self) -> None:  # noqa: N802 (nome exigido pela stdlib)
         partes = urlsplit(self.path)
