@@ -119,6 +119,26 @@ class TestRecuperarOrfaos:
         assert any(e.kind == "recover_failed" for e in eventos)
         assert len(listar_segmentos(conn, source_slug="radio-x")) == 0
 
+    def test_orfao_de_pasta_antiga_ainda_e_recuperado(self, conn, data_root):
+        # regressão: `recover` roda no boot; se a máquina ficou dias desligada depois de
+        # uma queda, o `.part` órfão está numa pasta de dia que não é hoje nem ontem.
+        # Precisa varrer TODAS as pastas da fonte, não só a janela de operação normal.
+        pasta = pasta_do_dia(data_root, "radio-x", datetime(2020, 1, 1, 3, 0, 0))
+        _criar_arquivo(pasta, "030000.ts.part", tamanho=4000)
+
+        def remuxer_falso(caminho: Path) -> Path:
+            destino = caminho.with_suffix("")
+            destino.write_bytes(caminho.read_bytes())
+            caminho.unlink()
+            return destino
+
+        resultado = recuperar_orfaos(conn, data_root, "radio-x", remuxer=remuxer_falso)
+
+        assert len(resultado.recuperados) == 1
+        assert (pasta / "030000.ts").exists()
+        segmentos = listar_segmentos(conn, source_slug="radio-x")
+        assert segmentos[0].started_at == "2020-01-01T03:00:00"
+
     def test_sem_nenhum_orfao_nao_faz_nada(self, conn, data_root):
         resultado = recuperar_orfaos(conn, data_root, "radio-x")
         assert resultado.recuperados == []

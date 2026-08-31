@@ -40,6 +40,22 @@ class TestFerramentas:
         cs = checar_ferramentas(which=lambda nome: f"/usr/bin/{nome}")
         assert all(c.status == Status.ok for c in cs)
 
+    def test_yt_dlp_ausente_com_fonte_youtube_e_falha(self):
+        from lupa_recorder.config import ChannelsConfig, Config, SourceConfig
+
+        fonte = SourceConfig(
+            id=1,
+            slug="tv-x",
+            kind="tv",
+            protocol="youtube",
+            url="https://www.youtube.com/watch?v=abc",
+            url_resolver="yt_dlp",
+        )
+        cfg = Config.model_construct(agent=None, channels=ChannelsConfig(sources=[fonte]))
+
+        cs = checar_ferramentas(cfg, which=lambda _: None)
+        assert {c.nome: c.status for c in cs}["yt-dlp"] == Status.falha
+
 
 class TestParsearOffsetChrony:
     def test_slow(self):

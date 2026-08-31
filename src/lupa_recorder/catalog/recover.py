@@ -16,7 +16,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from sqlite3 import Connection
 
-from lupa_recorder.capture.segments import listar_parciais, pasta_base, started_at_do_arquivo
+from lupa_recorder.capture.segments import (
+    listar_parciais_orfaos,
+    pasta_base,
+    started_at_do_arquivo,
+)
 from lupa_recorder.catalog.models import (
     Event,
     Segment,
@@ -84,7 +88,7 @@ def recuperar_orfaos(
     `.ts.part` encontrado é órfão por definição. Chamado no boot, antes do supervisor subir
     (nunca ao mesmo tempo — os dois mexendo no mesmo `.part` seria uma corrida)."""
     resultado = ResultadoRecover()
-    for orfao in listar_parciais(data_root, slug):
+    for orfao in listar_parciais_orfaos(data_root, slug):
         try:
             recuperado = remuxer(orfao)
         except RemuxError as exc:

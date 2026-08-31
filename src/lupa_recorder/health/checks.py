@@ -16,7 +16,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 
-from lupa_recorder.config import Config
+from lupa_recorder.config import Config, Protocol
 
 OFFSET_RELOGIO_MAX_S = 2.0  # plano §1.8 / §19 gap 2: acima disso, captura não deve começar
 HOST_DNS_TESTE = "one.one.one.one"
@@ -52,18 +52,31 @@ Rodar = Callable[[list[str]], subprocess.CompletedProcess]
 # ── checagens individuais ────────────────────────────────────────────────────
 
 
-def checar_ferramentas(*, which=shutil.which) -> list[Checagem]:
+def checar_ferramentas(cfg: Config | None = None, *, which=shutil.which) -> list[Checagem]:
     out = []
     for ferramenta in ("ffmpeg", "ffprobe"):
         if which(ferramenta):
             out.append(Checagem(ferramenta, Status.ok, "no PATH"))
         else:
             out.append(Checagem(ferramenta, Status.falha, "não encontrado no PATH"))
-    out.append(
-        Checagem("yt-dlp", Status.ok, "no PATH")
-        if which("yt-dlp")
-        else Checagem("yt-dlp", Status.aviso, "ausente — só bloqueia fontes protocol=youtube")
+
+    fontes_youtube = (
+        sum(s.protocol == Protocol.youtube for s in cfg.channels.sources) if cfg is not None else 0
     )
+    if which("yt-dlp"):
+        out.append(Checagem("yt-dlp", Status.ok, "no PATH"))
+    elif fontes_youtube:
+        # com fonte protocol=youtube cadastrada, yt-dlp ausente não é inconveniência: aquela
+        # captura fica em loop de erro pra sempre. Vira falha pra aparecer no `doctor`.
+        out.append(
+            Checagem(
+                "yt-dlp",
+                Status.falha,
+                f"ausente e {fontes_youtube} fonte(s) protocol=youtube cadastrada(s) — rode o bootstrap.sh",
+            )
+        )
+    else:
+        out.append(Checagem("yt-dlp", Status.aviso, "ausente — só bloqueia fontes protocol=youtube"))
     return out
 
 
@@ -182,7 +195,7 @@ def rodar_todas(
     incluir_rede: bool = True,
 ) -> list[Checagem]:
     out: list[Checagem] = []
-    out.extend(checar_ferramentas())
+    out.extend(checar_ferramentas(cfg))
     out.append(checar_relogio())
     out.extend(checar_config(cfg, erro_carga_config))
     out.extend(checar_escrita(cfg))

@@ -32,6 +32,18 @@ echo "== Pacotes =="
 apt-get update
 apt-get install -y ffmpeg curl chrony python3-venv
 
+echo "== yt-dlp (fontes protocol=youtube) =="
+# O apt do Debian 12 traz um yt-dlp velho demais pro YouTube atual — usa o zipapp oficial
+# (arch-independente: serve x86_64 e ARM64, só precisa do python3 que já instalamos).
+if ! command -v yt-dlp >/dev/null 2>&1; then
+  curl -fsSL https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
+  chmod a+rx /usr/local/bin/yt-dlp
+  echo "yt-dlp instalado em /usr/local/bin/yt-dlp"
+else
+  echo "yt-dlp já no PATH, pulando."
+fi
+yt-dlp --version 2>/dev/null || echo "⚠️  yt-dlp não executou — confira se python3 está no PATH."
+
 echo "== chrony (relógio — obrigatório, plano §1.8 / gap 2) =="
 systemctl enable --now chrony
 chronyc tracking || true

@@ -49,6 +49,22 @@ from lupa_recorder.thumbs.manager import executar_loop as executar_loop_thumbs
 
 NOME_ARQUIVO_CATALOGO = "catalog.sqlite3"
 
+# Layout de instalação (bootstrap.sh / systemd). Um `lupa-recorder doctor` rodado à mão,
+# fora de qualquer diretório, ainda tem que achar a config — o systemd resolve isso com
+# WorkingDirectory, mas o operador digitando o comando não.
+DIRETORIO_CONFIG_SISTEMA = Path("/var/lib/lupa-recorder")
+
+
+def _resolver_caminho_config(valor: str) -> Path:
+    """`--config`/`--channels`: um caminho absoluto ou que já existe no diretório atual vale
+    como veio; o default relativo (`agent.toml`, `channels.yaml`), quando não está aqui, cai
+    pro layout de instalação em /var/lib/lupa-recorder."""
+    p = Path(valor)
+    if p.is_absolute() or p.exists():
+        return p
+    do_sistema = DIRETORIO_CONFIG_SISTEMA / p.name
+    return do_sistema if do_sistema.exists() else p
+
 # Comandos DVB — só fazem sentido quando a placa existir (GRV-01). Ficam registrados
 # pra dar uma mensagem clara em vez de "invalid choice" do argparse.
 COMANDOS_DVB = {"scan", "signal"}
@@ -111,7 +127,7 @@ def _comando_probe(args: argparse.Namespace) -> int:
 
     disco_livre_gb = None
     dias_retencao = 5
-    config_path = Path(args.config)
+    config_path = _resolver_caminho_config(args.config)
     if config_path.exists():
         try:
             cfg = Config.load(agent_path=config_path, channels_path=_channels_path_ao_lado_do_agent(config_path))
@@ -192,7 +208,10 @@ def _imprimir_resultado_probe(r: ResultadoProbe) -> None:
 
 def _carregar_config_tolerante(args: argparse.Namespace) -> tuple[Config | None, str | None]:
     try:
-        return Config.load(Path(args.config), Path(args.channels)), None
+        cfg = Config.load(
+            _resolver_caminho_config(args.config), _resolver_caminho_config(args.channels)
+        )
+        return cfg, None
     except ConfigError as exc:
         return None, str(exc)
 
@@ -365,7 +384,9 @@ async def _supervisionar_todas_as_fontes(cfg: Config) -> int:
 
 def _carregar_config_ou_falhar(args: argparse.Namespace) -> Config | None:
     try:
-        return Config.load(Path(args.config), Path(args.channels))
+        return Config.load(
+            _resolver_caminho_config(args.config), _resolver_caminho_config(args.channels)
+        )
     except ConfigError as exc:
         print(f"Erro: {exc}", file=sys.stderr)
         return None

@@ -81,6 +81,27 @@ def listar_parciais(data_root: Path, slug: str, quando: datetime | None = None) 
     return sorted(parciais, key=lambda p: p.stat().st_mtime)
 
 
+def listar_parciais_orfaos(data_root: Path, slug: str) -> list[Path]:
+    """Todo `.ts.part` de **qualquer** pasta de dia da fonte, ordenado por mtime.
+
+    Usado só pelo `recover` no boot: ali nenhum processo de captura está escrevendo, então
+    um `.part` de dias/semanas atrás (máquina que ficou desligada muito tempo depois de uma
+    queda de energia) também é órfão e precisa ser remuxado ou descartado — senão fica pra
+    sempre do lado do `.ts`, ocupando disco. A operação normal usa `listar_parciais` (só
+    hoje/ontem), porque lá o `.part` mais recente pode estar sendo escrito neste instante.
+    """
+    base = pasta_base(data_root, slug)
+    if not base.is_dir():
+        return []
+    parciais = [
+        arquivo
+        for pasta_dia in base.iterdir()
+        if pasta_dia.is_dir()
+        for arquivo in pasta_dia.glob(f"*{SUFIXO_PARCIAL}")
+    ]
+    return sorted(parciais, key=lambda p: p.stat().st_mtime)
+
+
 def promover_segmentos_prontos(data_root: Path, slug: str, quando: datetime | None = None) -> list[Path]:
     """Renomeia todo `.ts.part` que **não** seja o mais recente pra `.ts` — o ffmpeg só
     escreve num arquivo por vez, então qualquer `.part` que não seja o mais novo já
