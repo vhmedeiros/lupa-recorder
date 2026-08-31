@@ -22,7 +22,15 @@ from lupa_recorder.health.checks import (
 )
 
 
-def _cfg_minima(tmp_path):
+def _porta_livre() -> int:
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.bind(("127.0.0.1", 0))
+    porta = s.getsockname()[1]
+    s.close()
+    return porta
+
+
+def _cfg_minima(tmp_path, *, porta: int | None = None):
     from lupa_recorder.config import Config
 
     agent = tmp_path / "agent.toml"
@@ -34,6 +42,8 @@ data_root = "{tmp_path}"
 system_root = "{tmp_path}"
 [security]
 hmac_secret = "segredo-de-teste-com-mais-de-16"
+[http]
+port = {porta or _porta_livre()}
 """)
     (tmp_path / "channels.yaml").write_text("sources: []")
     return Config.load(agent, tmp_path / "channels.yaml")
@@ -60,11 +70,10 @@ class TestPortaHttp:
         assert "livre" in c.detalhe
 
     def test_porta_ocupada_pelo_servico_e_ok(self, tmp_path, monkeypatch):
-        cfg = _cfg_minima(tmp_path)
         ocupa = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        ocupa.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        ocupa.bind(("127.0.0.1", cfg.agent.http.port))
+        ocupa.bind(("127.0.0.1", 0))
         ocupa.listen(1)
+        cfg = _cfg_minima(tmp_path, porta=ocupa.getsockname()[1])
         try:
             monkeypatch.setattr(checks, "_health_responde", lambda _p: True)
             assert checar_porta_http(cfg).status == Status.ok
