@@ -41,6 +41,7 @@ from lupa_recorder.http.app import (
     ContextoServidor,
     encerrar_servidores,
     iniciar_servidores,
+    url_player_assinada,
     url_playlist_assinada,
 )
 from lupa_recorder.probe import ProbeError, ResultadoProbe, probe, resultado_para_json
@@ -367,12 +368,17 @@ async def _supervisionar_todas_as_fontes(cfg: Config) -> int:
     try:
         servidores = iniciar_servidores(ctx)
         hoje = date.today().isoformat()
-        base = f"http://{servidores[0].server_address[0]}:{servidores[0].server_address[1]}"
+        enderecos = [s.server_address for s in servidores]
+        # prefere o IP da tailnet (o que dá pra abrir de outra máquina) pra logar as URLs
+        publico = next((a for a in enderecos if not a[0].startswith("127.")), enderecos[0])
+        base = f"http://{publico[0]}:{publico[1]}"
         for srv in servidores:
             print(f"HTTP local escutando em http://{srv.server_address[0]}:{srv.server_address[1]}/v1/")
         for fonte in cfg.channels.sources:
             url = url_playlist_assinada(ctx, fonte.slug, hoje, ttl_s=24 * 3600)
-            print(f"  playlist de hoje ({fonte.slug}): {base}{url}", flush=True)
+            player = url_player_assinada(ctx, fonte.slug, hoje, ttl_s=24 * 3600)
+            print(f"  playlist ({fonte.slug}): {base}{url}")
+            print(f"  player   ({fonte.slug}): {base}{player}", flush=True)
 
         await asyncio.gather(*tarefas)
     finally:

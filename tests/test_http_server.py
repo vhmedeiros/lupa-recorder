@@ -48,7 +48,17 @@ def _thumbs(slug: str, resto: str) -> str:
     return f"/v1/thumbs/{slug}/{resto}?{_q(slug, data)}"
 
 
-# ── health (sem auth) ────────────────────────────────────────────────────────
+# ── player e health (sem auth) ───────────────────────────────────────────────
+
+
+def test_player_serve_html_sem_token(servidor):
+    status, headers, corpo = _req(servidor, "GET", "/v1/player")
+
+    assert status == 200
+    assert headers["content-type"].startswith("text/html")
+    texto = corpo.decode()
+    assert "<video" in texto and "hls.js" in texto
+    assert headers["access-control-allow-origin"] == "*"
 
 
 def test_health_responde_sem_token(servidor):

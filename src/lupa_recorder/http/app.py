@@ -45,6 +45,7 @@ from lupa_recorder.http.auth import (
     verificar,
     verificar_escopo,
 )
+from lupa_recorder.http.player_page import PAGINA_PLAYER
 from lupa_recorder.http.playlist import EntradaSegmento, montar_playlist
 from lupa_recorder.probe import ProbeError, ResultadoProbe, probe, resultado_para_json
 
@@ -108,6 +109,16 @@ def url_playlist_assinada(
     recargas da playlist `EVENT`)."""
     query = query_escopo_assinada(ctx.secret, slug, data_iso, ttl_s=ttl_s)
     return f"/v1/play/{slug}/{data_iso}.m3u8?{query}"
+
+
+def url_player_assinada(
+    ctx: ContextoServidor, slug: str, data_iso: str, *, ttl_s: int = TTL_PADRAO_S
+) -> str:
+    """`/v1/player?fonte=&dia=&e=&s=` — a página de player do próprio agente, já apontada
+    pra playlist do dia. É o que o `run` loga pra colar direto no navegador (critério C2),
+    sem CORS nem servidor de arquivos separado."""
+    query = query_escopo_assinada(ctx.secret, slug, data_iso, ttl_s=ttl_s)
+    return f"/v1/player?fonte={slug}&dia={data_iso}&{query}"
 
 
 def _data_dos_thumbs(resto: str) -> str | None:
@@ -267,6 +278,9 @@ class _HandlerHttp(BaseHTTPRequestHandler):
     def _despachar_get(self, caminho: str, params: dict[str, str], query_bruta: str) -> None:
         if caminho == "/v1/health":
             return self._rota_health()
+        if caminho == "/v1/player":
+            # HTML estático — sem token (não expõe nada; a .m3u8 que ele carrega ainda exige).
+            return self._corpo(PAGINA_PLAYER.encode(), "text/html; charset=utf-8")
         if caminho == "/v1/status":
             if self._auth_path_ok(caminho, params):
                 self._rota_status()
