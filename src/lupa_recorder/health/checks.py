@@ -9,9 +9,12 @@ gravar como evento no catálogo.
 
 from __future__ import annotations
 
+import json
 import shutil
 import socket
 import subprocess
+import urllib.error
+import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
@@ -154,9 +157,34 @@ def checar_porta_http(cfg: Config | None) -> Checagem:
         s.bind(("127.0.0.1", porta))
         return Checagem("porta HTTP", Status.ok, f"{porta}/tcp livre")
     except OSError:
-        return Checagem("porta HTTP", Status.aviso, f"{porta}/tcp ocupada (o próprio `run` já rodando?)")
+        pass
     finally:
         s.close()
+
+    # porta ocupada — o caso normal é o próprio serviço rodando. Confirma batendo no
+    # /v1/health: se responder no formato do agente, é ✅ (não um aviso permanente que
+    # polui o `doctor` toda vez que o timer roda com o serviço no ar).
+    if _health_responde(porta):
+        return Checagem("porta HTTP", Status.ok, f"{porta}/tcp em uso pelo próprio lupa-recorder")
+    return Checagem(
+        "porta HTTP", Status.aviso, f"{porta}/tcp ocupada por outro processo (não é o lupa-recorder)"
+    )
+
+
+def _health_responde(porta: int, *, abrir=urllib.request.urlopen) -> bool:
+    url = f"http://127.0.0.1:{porta}/v1/health"
+    try:
+        with abrir(url, timeout=2) as resp:
+            bruto = resp.read()
+    except urllib.error.HTTPError as exc:
+        bruto = exc.read()  # /v1/health devolve 503 quando degradado — ainda é o agente
+    except (urllib.error.URLError, OSError):
+        return False
+    try:
+        corpo = json.loads(bruto)
+    except ValueError:
+        return False
+    return isinstance(corpo, dict) and "uptime_s" in corpo
 
 
 def checar_dns(*, resolver=socket.getaddrinfo) -> Checagem:

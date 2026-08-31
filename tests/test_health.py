@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import socket
 import subprocess
 
 import pytest
@@ -9,14 +10,77 @@ import pytest
 from lupa_recorder.health import checks
 from lupa_recorder.health.checks import (
     Status,
+    _health_responde,
     _parsear_offset_chrony,
     checar_config,
     checar_ferramentas,
+    checar_porta_http,
     checar_relogio,
     linha_de_evento,
     resumir,
     rodar_todas,
 )
+
+
+def _cfg_minima(tmp_path):
+    from lupa_recorder.config import Config
+
+    agent = tmp_path / "agent.toml"
+    agent.write_text(f"""
+[agent]
+name = "x"
+[paths]
+data_root = "{tmp_path}"
+system_root = "{tmp_path}"
+[security]
+hmac_secret = "segredo-de-teste-com-mais-de-16"
+""")
+    (tmp_path / "channels.yaml").write_text("sources: []")
+    return Config.load(agent, tmp_path / "channels.yaml")
+
+
+class _FakeResp:
+    def __init__(self, corpo: bytes):
+        self._corpo = corpo
+
+    def read(self) -> bytes:
+        return self._corpo
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        return False
+
+
+class TestPortaHttp:
+    def test_porta_livre_e_ok(self, tmp_path):
+        c = checar_porta_http(_cfg_minima(tmp_path))
+        assert c.status == Status.ok
+        assert "livre" in c.detalhe
+
+    def test_porta_ocupada_pelo_servico_e_ok(self, tmp_path, monkeypatch):
+        cfg = _cfg_minima(tmp_path)
+        ocupa = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        ocupa.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        ocupa.bind(("127.0.0.1", cfg.agent.http.port))
+        ocupa.listen(1)
+        try:
+            monkeypatch.setattr(checks, "_health_responde", lambda _p: True)
+            assert checar_porta_http(cfg).status == Status.ok
+
+            monkeypatch.setattr(checks, "_health_responde", lambda _p: False)
+            c = checar_porta_http(cfg)
+            assert c.status == Status.aviso
+            assert "outro processo" in c.detalhe
+        finally:
+            ocupa.close()
+
+    def test_health_responde_reconhece_o_agente(self):
+        assert _health_responde(
+            9999, abrir=lambda *a, **k: _FakeResp(b'{"uptime_s": 3, "status": "ok"}')
+        )
+        assert not _health_responde(9999, abrir=lambda *a, **k: _FakeResp(b"<html>nginx</html>"))
 
 TRACKING_OK = """Reference ID    : 0A0A0A0A (a.b.c)
 Stratum         : 3
