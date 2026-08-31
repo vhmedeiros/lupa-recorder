@@ -33,7 +33,17 @@ from lupa_recorder.catalog.models import (
 )
 from lupa_recorder.config import RETENCAO_DIAS_POR_TIER, Tier
 
+logger = logging.getLogger(__name__)
+
 ORDEM_SACRIFICIO: tuple[Tier, ...] = (Tier.background, Tier.standard, Tier.critical)
+
+
+def _humano(n: int) -> str:
+    for unidade in ("B", "KB", "MB", "GB"):
+        if abs(n) < 1024 or unidade == "GB":
+            return f"{n:.0f} {unidade}" if unidade == "B" else f"{n:.1f} {unidade}"
+        n /= 1024
+    return f"{n:.1f} GB"
 
 
 def _segmento_protegido(seg: Segment, agora: datetime) -> bool:
@@ -136,12 +146,23 @@ def executar_ciclo(
     resultado = ResultadoGC()
 
     resultado.apagados_por_idade = purgar_expirados_por_idade(conn, tier_por_fonte, agora)
+    if resultado.apagados_por_idade:
+        logger.info("gc: %d segmento(s) apagado(s) por idade", len(resultado.apagados_por_idade))
 
     uso = medir_uso_pct(data_root)
     if uso > watermark_high:
         total = medir_total_bytes(data_root)
         bytes_a_liberar = int((uso - watermark_low) * total)
         resultado.apagados_por_pressao = purgar_por_pressao(conn, tier_por_fonte, bytes_a_liberar, agora)
+        liberados = sum(s.bytes for s in resultado.apagados_por_pressao)
+        # WARNING de propósito: disco cheio é o operador precisando saber, não trivia de debug.
+        logger.warning(
+            "gc: disco em %.0f%% (> watermark %.0f%%) — %d segmento(s) sacrificado(s), %s liberados",
+            uso * 100,
+            watermark_high * 100,
+            len(resultado.apagados_por_pressao),
+            _humano(liberados),
+        )
         registrar_evento(
             conn,
             Event(
