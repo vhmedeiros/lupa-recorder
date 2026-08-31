@@ -23,7 +23,7 @@ máquinas com ciclo de release próprio, precisa ser leve).
 🟡 Fase 1 em andamento — **código de todas as sub-etapas de rede pronto** (0, 1.1, 1.2, 1.4, 1.5,
 1.6, 1.7, 1.8). `bootstrap.sh` + `doctor` verde validados numa VM Debian 12 limpa (2026-08-31);
 falta o teste de campo de 72h, o `bench` com fontes reais e a queda de energia. DVB (1.3) adiado
-sem previsão (GRV-01). 246 testes. Ver
+sem previsão (GRV-01). 247 testes. Ver
 [`fase1-gravador-autonomo.md`](https://github.com/vhmedeiros/Lupa/blob/main/docs/gravacao-tv-radio/fase1-gravador-autonomo.md)
 pro checklist completo.
 
